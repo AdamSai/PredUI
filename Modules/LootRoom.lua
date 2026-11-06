@@ -21,6 +21,12 @@
 --     without looting or full bags, to clear out junk. It updates as the bags
 --     change and stays open until closed (Esc works). It can be dragged and
 --     remembers its place; the window that opens on loot stays by the loot.
+--   * "Items shown" is how many rows the window has; a scroll bar (and the
+--     mouse wheel) goes through the rest, cheapest first.
+--   * The same list opens by itself when a quest can't be turned in because
+--     the bags are full: the "<quest> failed: Inventory is full." error
+--     (ERR_QUEST_FAILED_BAG_FULL_S), or a plain "Inventory is full." right
+--     after Complete Quest (GetQuestReward, which Blizzard's button calls).
 --------------------------------------------------------------------------------
 
 local _, ns = ...
@@ -29,7 +35,7 @@ local S = ns.Style
 local M = ns.NewModule("loot", {
 	title = "Loot Room",
 	notes = "When your bags are full, shows your lowest-value items next to the loot window so you can free a slot.",
-	defaults = { count = 5, sortBy = "vendor" },
+	defaults = { count = 5, sortBy = "vendor", questFull = true },
 })
 
 local SORT_LABELS = { vendor = "Vendor price", ah = "AH price", best = "Higher of the two" }
@@ -44,10 +50,16 @@ local ROW_SPACING = 3
 local FRAME_WIDTH = 380
 local TAG_WIDTH = 56
 
+local SCROLL_GAP = 14            -- room for the scroll bar beside the bag rows
+
 local db
 local lootOpen, manualMode = false, false
 local frame
 local bagRows, lootRows = {}, {}
+local allBag = {}                -- every candidate, cheapest first
+local bagOffset, bagTop = 0, 0   -- first shown candidate - 1, and where the rows start
+local syncingBar = false
+local DrawBagRows
 
 local function GetCount()
 	local n = tonumber(db.count) or M.defaults.count
@@ -176,11 +188,7 @@ local function GetCandidates()
 		if a.value ~= b.value then return a.value < b.value end
 		return a.itemID < b.itemID
 	end)
-
-	local limit = GetCount()
-	for i = #list, limit + 1, -1 do
-		list[i] = nil
-	end
+	-- All of them: the window shows GetCount() at a time and scrolls to the rest.
 	return list
 end
 
@@ -384,13 +392,14 @@ local function CreateRow(isLoot)
 	return row
 end
 
-local function FillRows(pool, list, isLoot, y)
+local function FillRows(pool, list, isLoot, y, width)
 	for i, entry in ipairs(list) do
 		local row = pool[i]
 		if not row then
 			row = CreateRow(isLoot)
 			pool[i] = row
 		end
+		row:SetWidth(width or (FRAME_WIDTH - S.PAD * 2))
 		row.entry = entry
 		row.icon:SetTexture(entry.icon)
 		row.count:SetText(entry.count > 1 and entry.count or "")
@@ -455,6 +464,23 @@ local function BuildWindow()
 		self:StopMovingOrSizing()
 		manualMode = false
 		self.placedByHand = false
+		bagOffset = 0
+	end)
+
+	-- Scrolls the bag items past the "Items shown" count; loot rows stay put.
+	frame.scrollBar = S.ScrollBar(frame, function(value)
+		if not syncingBar and value ~= bagOffset then
+			bagOffset = value
+			DrawBagRows()
+		end
+	end)
+	frame.scrollBar:Hide()
+	frame:EnableMouseWheel(true)
+	frame:SetScript("OnMouseWheel", function(_, delta)
+		if frame.scrollBar:IsShown() then
+			local _, maxOffset = frame.scrollBar:GetMinMaxValues()
+			frame.scrollBar:SetValue(math.max(0, math.min(maxOffset, bagOffset - delta)))
+		end
 	end)
 
 	frame.empty = S.Text(frame, 12)
@@ -466,13 +492,29 @@ local function BuildWindow()
 	frame.click:SetTextColor(0.6, 0.6, 0.6)
 end
 
+-- The visible slice of allBag, from bagOffset, below bagTop.
+function DrawBagRows()
+	local visible = {}
+	for i = bagOffset + 1, math.min(#allBag, bagOffset + GetCount()) do
+		visible[#visible + 1] = allBag[i]
+	end
+	local width = FRAME_WIDTH - S.PAD * 2
+	if frame.scrollBar:IsShown() then width = width - SCROLL_GAP end
+	FillRows(bagRows, visible, false, bagTop, width)
+	-- Tooltip of the row under the mouse now belongs to another item.
+	for _, row in ipairs(bagRows) do
+		if row:IsShown() and row:IsMouseOver() and row.entry then BagRow_OnEnter(row) end
+	end
+end
+
 function Refresh()
 	if not (lootOpen or manualMode) or (not manualMode and not BagsFull()) then
 		frame:Hide()
 		return
 	end
 
-	local bagList = GetCandidates()
+	allBag = GetCandidates()
+	local bagList = allBag
 	local cheapest = bagList[1] and bagList[1].value
 	local lootList, needsRoom = GetLootEntries(cheapest)
 
@@ -500,7 +542,29 @@ function Refresh()
 		frame.click:Show()
 		y = y - 14
 	end
-	y = FillRows(bagRows, bagList, false, y)
+
+	-- Bag items: GetCount() rows at a time, with a scroll bar when there are more.
+	local shown = math.min(#allBag, GetCount())
+	local maxOffset = math.max(0, #allBag - shown)
+	bagOffset = math.min(bagOffset, maxOffset)
+	bagTop = y
+	local listHeight = shown * (ROW_HEIGHT + ROW_SPACING) - ROW_SPACING
+	local bar = frame.scrollBar
+	if maxOffset > 0 then
+		bar:ClearAllPoints()
+		bar:SetPoint("TOPRIGHT", -S.PAD, y)
+		bar:SetHeight(listHeight)
+		-- Setting the range can move the thumb and fire onScroll; we set the value ourselves.
+		syncingBar = true
+		bar:SetMinMaxValues(0, maxOffset)
+		bar:SetValue(bagOffset)
+		syncingBar = false
+		bar:Show()
+	else
+		bar:Hide()
+	end
+	DrawBagRows()
+	if shown > 0 then y = y - listHeight - ROW_SPACING end
 
 	if #lootList > 0 then
 		y = y - 8
@@ -591,6 +655,35 @@ function M.ResetPosition()
 	M.Say("list position reset.")
 end
 
+--------------------------------------------------------------------------------
+-- Quest turn-in failed because the bags are full
+--------------------------------------------------------------------------------
+
+local TURN_IN_WINDOW = 3         -- seconds after Complete Quest an error counts
+local turnInAt = 0
+
+-- A Lua pattern for a "%s"-style game string, e.g. "(.+) failed: Inventory is full%."
+local function FormatToPattern(text)
+	if type(text) ~= "string" or text == "" then return end
+	-- Escape magic characters, except "%", which only starts the %s / %d slots.
+	text = text:gsub("[%^%$%(%)%.%[%]%*%+%-%?]", "%%%0")
+	text = text:gsub("%%s", "(.+)"):gsub("%%d", "%%d+")
+	return "^" .. text .. "$"
+end
+local QUEST_BAG_FULL = FormatToPattern(ERR_QUEST_FAILED_BAG_FULL_S)
+
+local function IsQuestBagFull(message)
+	message = ns.PublicString(message)
+	if not message then return false end
+	if QUEST_BAG_FULL and message:match(QUEST_BAG_FULL) then return true end
+	return message == ERR_INV_FULL and GetTime() - turnInAt <= TURN_IN_WINDOW
+end
+
+local function OnQuestBagFull()
+	if not db.questFull or (frame:IsShown() and manualMode) then return end
+	M.Test()
+end
+
 local function ToggleList()
 	if frame:IsShown() and manualMode then
 		frame:Hide()
@@ -653,7 +746,7 @@ end
 
 M.options = {
 	{ type = "slider", key = "count", label = "Items shown", min = MIN_COUNT, max = MAX_COUNT, step = 1,
-		tooltip = "How many of your lowest-value bag items to list when your bags are full.",
+		tooltip = "How many of your lowest-value bag items the window shows at once. Scroll it for the rest.",
 		onChange = function() if frame:IsShown() then Refresh() end end },
 	{ type = "dropdown", key = "sortBy", label = "Value by",
 		tooltip = "Which price decides what's lowest value, for your bag items and the loot.\n\nAH price needs Auctionator. Soulbound items and items it has no price for use the vendor price.",
@@ -664,6 +757,8 @@ M.options = {
 	{ type = "button", label = "Hidden items", button = "Offer again",
 		tooltip = "Clear the list of items you chose to never offer (right-click an item in the window).",
 		func = ClearHidden },
+	{ type = "checkbox", key = "questFull", label = "Open when a quest can't be turned in",
+		tooltip = "Show the list by itself when you can't turn in a quest because your bags are full." },
 	{ type = "button", label = "List my items", button = "Show list", tooltip = "Show your lowest-value items now, in the order above, without looting or full bags. Click one to delete it, drag the window to move it. Also /lootroom show.", func = function() M.Test() end },
 	{ type = "button", label = "List position", button = "Reset", tooltip = "Put the list you open by hand back in its default place.", func = function() M.ResetPosition() end },
 }
@@ -691,8 +786,18 @@ function M:Enable()
 	events:RegisterEvent("BAG_UPDATE_DELAYED")
 	events:RegisterEvent("QUEST_LOG_UPDATE")
 	events:RegisterEvent("GET_ITEM_INFO_RECEIVED")
-	events:SetScript("OnEvent", function(_, event)
-		if event == "LOOT_OPENED" then
+	events:RegisterEvent("UI_ERROR_MESSAGE")
+	events:RegisterEvent("CHAT_MSG_SYSTEM")
+	if type(GetQuestReward) == "function" then
+		hooksecurefunc("GetQuestReward", function() turnInAt = GetTime() end)
+	end
+	events:SetScript("OnEvent", function(_, event, arg1, arg2)
+		if event == "UI_ERROR_MESSAGE" or event == "CHAT_MSG_SYSTEM" then
+			-- UI_ERROR_MESSAGE: errorType, message. CHAT_MSG_SYSTEM: text.
+			if IsQuestBagFull(event == "UI_ERROR_MESSAGE" and arg2 or arg1) then
+				OnQuestBagFull()
+			end
+		elseif event == "LOOT_OPENED" then
 			lootOpen = true
 			QueueRefresh()
 		elseif event == "LOOT_CLOSED" then

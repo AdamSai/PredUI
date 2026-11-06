@@ -45,6 +45,8 @@ When you loot with full bags, a window next to the loot window lists your lowest
 
 - **Value by** vendor price, Auctionator price, or the higher of the two (`/lootroom sort vendor|ah|best`). Prices from the auction house are marked "AH". Soulbound items, grey items, and items Auctionator has no price for use the vendor price.
 - **List any time** with `/lootroom show` (or "Show list" in the settings) to clear out junk without looting. Drag that window wherever you like; `/lootroom reset` puts it back.
+- **Quest turn-ins:** the list also opens by itself when a quest can't be turned in because your bags are full (can be turned off in the settings).
+- "Items shown" sets how many rows the window has; scroll (bar or mouse wheel) to see the rest of your items, cheapest first.
 - Click an item to delete it (it asks first). Right-click for "Never offer this item"; `/lootroom unhide` offers them again.
 - Quest items and items in profession bags are never listed. Loot that fits onto a stack you already have doesn't open the window.
 
