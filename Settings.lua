@@ -177,7 +177,7 @@ local function PrintHelp()
 	ns.Print("our addons in one. /predui opens the settings. Modules and their commands:")
 	local commands = {
 		flight = "/flighttimer", craft = "/crafttimer", bag = "/bagvalue", icon = "/iconsearch",
-		loot = "/lootroom", mail = "/mledger", cvars = "/hiddensettings", paladin = "/palbuffs", bankalt = "/bankalt", notes = "/notes",
+		loot = "/lootroom", mail = "/mledger", cvars = "/hiddensettings", paladin = "/palbuffs", bankalt = "/bankalt", notes = "/notes", partyloc = "/partyloc",
 	}
 	for _, M in ipairs(ns.modules) do
 		local state = M.enabled and "|cff40ff40on|r" or (ns.IsEnabled(M.key) and "|cffff8040on after reload|r" or "|cff808080off|r")

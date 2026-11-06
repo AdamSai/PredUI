@@ -20,6 +20,7 @@ Every part is a module you can turn on or off. Open the settings with `/predui` 
 | **Hidden Settings** | Game settings that aren't in the Options menu: denser grass, longer foliage distance, weather, screen effects and more. | `/hiddensettings` |
 | **Paladin Buffs** | Shows your active seal next to the Cooldown Manager's buff icons (flashing and glowing as it runs out or when it's missing in combat), and a Righteous Fury reminder in dungeons, raids, and groups when you have a shield on. | `/palbuffs` |
 | **Notes** | Post-it notes and checklists for reminders. Keep a list of notes, pin one to keep it on screen, or have it open by itself when you enter a zone or any capital city. A floating button (optional) opens the list. | `/notes` |
+| **Party Locations** | On the Group Finder's Browse tab, shows where a listed group's leader is and whether they're at the dungeon, so you can tell whether it's worth joining. | `/partyloc` |
 
 ### Bank Alt
 
@@ -104,3 +105,15 @@ Turning a module on or off takes a `/reload`, because modules hook the game's ow
 ## Moving from the old standalone addons
 
 Flight Timer, Craft Timer, Bag Value, Icon Search, Loot Room and Mail Ledger used to be separate addons. With the game closed, `node Tools/migrate.js` copies their saved data into PredUI's saved variables.
+
+### Party Locations
+
+On the Group Finder's Browse tab, a list of a group's members and the zone its leader is in, so you can see whether they're at the dungeon before you ask to join.
+
+- It shows the group under the mouse (just below Blizzard's group tooltip), or the selected group, in a panel beside the Group Finder.
+- The leader is marked **inside** (in the dungeon), **here** (in its zone) or **away**. Below that is the zone you're in yourself.
+- Only the leader's zone is shown: the game doesn't share the other members' zones with the Group Finder.
+- Forever doesn't tell addons which zone a dungeon is in, so PredUI learns it: each time you enter a dungeon, the zone you came from is counted for it. Until then the panel lists zones without marks. `/partyloc zones` shows what's known, `/partyloc forget` clears it.
+- `/partyloc test` shows the panel with a made-up group.
+
+<img src="docs/screenshots/party-locations.png" alt="Party Locations panel under the group tooltip, showing the leader's zone" width="560">
