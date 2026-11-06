@@ -2,7 +2,7 @@
 ## Title: PredUI
 ## Notes: Our addons in one: Flight Timer, Craft Timer, Bag Value, Icon Search, Loot Room, Mail Ledger, Paladin Buffs, Bank Alt and Notes, with one settings menu. Type /predui.
 ## Author: Pred
-## Version: 1.11.0
+## Version: 1.13.0
 ## IconTexture: Interface\AddOns\PredUI\Media\Icon
 ## SavedVariables: PredUIDB
 ## SavedVariablesPerCharacter: PredUICharDB

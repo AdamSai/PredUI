@@ -19,7 +19,7 @@ Every part is a module you can turn on or off. Open the settings with `/predui` 
 | **Mail Ledger** | Shows how much gold you looted from the mailbox, where it came from and what is still waiting. Can open the mailbox on Send Mail, addressed to your default alt. | `/mledger` |
 | **Hidden Settings** | Game settings that aren't in the Options menu: denser grass, longer foliage distance, weather, screen effects and more. | `/hiddensettings` |
 | **Paladin Buffs** | Shows your active seal next to the Cooldown Manager's buff icons (flashing and glowing as it runs out or when it's missing in combat), and a Righteous Fury reminder in dungeons, raids, and groups when you have a shield on. | `/palbuffs` |
-| **Notes** | Post-it notes for reminders. Keep a list of notes, pin one to keep it on screen, or have it open by itself when you enter a zone or any capital city. A floating button (optional) opens the list. | `/notes` |
+| **Notes** | Post-it notes and checklists for reminders. Keep a list of notes, pin one to keep it on screen, or have it open by itself when you enter a zone or any capital city. A floating button (optional) opens the list. | `/notes` |
 
 ### Bank Alt
 
@@ -50,11 +50,14 @@ Marks items in your bags and bank so you can see at a glance what to mail to you
 Post-it notes in four paper colours, with a list of all your notes and a floating button to open it.
 
 - **Pin** a note to keep it on screen, also after a reload.
+- **Checklists** for shopping lists and the like: "New list" (or "List" on a note, which turns its lines into items). Tick items off, "Clear ticked" removes them.
 - **Areas**: a note can open by itself when you enter a zone, a subzone or any capital city.
 - New notes are only seen by the character that wrote them; untick "Only on ..." under Areas to share one with all your characters.
 - Drag a note by its title to move it.
 
 <img src="docs/screenshots/notes-list.png" alt="Notes list, notes and the floating button" width="480"> <img src="docs/screenshots/notes-areas.png" alt="A note's Areas panel" width="480">
+
+<img src="docs/screenshots/notes-checklist.png" alt="A checklist note" width="376">
 
 ## Works with
 

@@ -9,6 +9,8 @@
 --     you type). New notes belong to the character that wrote them (other
 --     characters don't see them); untick "Only on <name>" under Areas to share
 --     one, or change the default in the settings.
+--   * Checklists: "List" on a note turns its lines into items you can tick
+--     off (shopping lists...), and back into text. "New list" starts one.
 --   * Pin: a pinned note has no close button and opens again after a login or
 --     reload, so it stays on screen until you un-pin it.
 --   * Areas: a note can open by itself when you enter a zone or subzone you
@@ -31,6 +33,9 @@ local M = ns.NewModule("notes", {
 local NOTE_W, NOTE_H = 260, 210
 local LIST_W, LIST_ROWS, ROW_H = 320, 12, 22
 local INK = { 0.16, 0.13, 0.06 }
+local ITEM_H = 20
+local TEXT_W = NOTE_W - S.PAD * 2 - 10      -- width of the text / list area
+local ITEM_W = TEXT_W - 20 - 18             -- item text, between tick box and remove button
 
 -- Paper colours: { name, r, g, b }.
 local PAPERS = {
@@ -60,7 +65,7 @@ local frames = {}              -- [id] = note window
 local freeFrames = {}
 local listFrame, areaPanel
 local lastMatch = {}           -- [id] = true while you're in one of the note's areas
-local RefreshList, RefreshAreaPanel, OpenNote, UpdateFloatButton
+local RefreshList, RefreshAreaPanel, OpenNote, UpdateFloatButton, RefreshItems, ApplyMode
 
 --------------------------------------------------------------------------------
 -- Data
@@ -84,10 +89,53 @@ local function Paper(note)
 	return PAPERS[note.color or 1] or PAPERS[1]
 end
 
-local function NewNote(text)
+local function IsList(note)
+	return note.kind == "list"
+end
+
+local function Trim(text)
+	return (text or ""):match("^%s*(.-)%s*$")
+end
+
+-- Text lines become items; "[x] milk" comes back ticked, "- milk" loses the dash.
+local function TextToItems(text, separator)
+	local items = {}
+	for line in (text or ""):gmatch(separator or "[^\n]+") do
+		local mark, rest = line:match("^%s*%[([xX ]?)%]%s*(.*)$")
+		local t = Trim(rest or line:match("^%s*[-*]?%s*(.*)$"))
+		if t ~= "" then
+			items[#items + 1] = { text = t, done = (mark == "x" or mark == "X") or nil }
+		end
+	end
+	return items
+end
+
+local function ItemsToText(items)
+	local lines = {}
+	for _, item in ipairs(items or {}) do
+		lines[#lines + 1] = (item.done and "[x] " or "") .. item.text
+	end
+	return table.concat(lines, "\n")
+end
+
+local function Progress(note)
+	local done = 0
+	for _, item in ipairs(note.items or {}) do
+		if item.done then done = done + 1 end
+	end
+	return done, #(note.items or {})
+end
+
+-- kind "list": a checklist; text then holds the first items, split on commas.
+local function NewNote(text, kind)
 	local id = db.nextID
 	db.nextID = id + 1
 	local note = { id = id, title = "", text = text or "", created = time(), updated = time(), color = 1, zones = {} }
+	if kind == "list" then
+		note.kind = "list"
+		note.items = TextToItems(text, "[^,;\n]+")
+		note.text = ""
+	end
 	if db.charOnly then note.owner = Me() end
 	db.list[id] = note
 	return note
@@ -95,7 +143,12 @@ end
 
 local function Label(note)
 	if note.title ~= "" then return note.title end
-	local first = note.text:match("^%s*([^\n]+)")
+	local first
+	if IsList(note) then
+		first = note.items[1] and note.items[1].text
+	else
+		first = note.text:match("^%s*([^\n]+)")
+	end
 	return first or "(empty)"
 end
 
@@ -225,10 +278,150 @@ local function ApplyAreaTag(f)
 end
 
 local function UpdateScrollBar(f)
-	local range = math.floor(f.scroll:GetVerticalScrollRange() + 0.5)
+	local range = math.floor((f.scroll:GetVerticalScrollRange() or 0) + 0.5)
 	f.bar:SetMinMaxValues(0, range)
 	f.bar:SetShown(range > 0)
-	f.bar:SetValue(math.min(range, math.floor(f.scroll:GetVerticalScroll() + 0.5)))
+	f.bar:SetValue(math.min(range, math.floor((f.scroll:GetVerticalScroll() or 0) + 0.5)))
+end
+
+-- A single-line, borderless edit box in ink, for checklist items.
+local function ItemBox(parent)
+	local e = CreateFrame("EditBox", nil, parent)
+	e:SetFont(STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF", 12, "")
+	e:SetTextColor(INK[1], INK[2], INK[3])
+	e:SetShadowOffset(0, 0)
+	e:SetAutoFocus(false)
+	e:SetMaxLetters(200)
+	e:SetHeight(ITEM_H)
+	e:SetScript("OnEscapePressed", e.ClearFocus)
+	return e
+end
+
+-- The line through a ticked item, as wide as its text.
+local function UpdateStrike(row)
+	local done = row.item and row.item.done
+	row.edit:SetTextColor(INK[1], INK[2], INK[3], done and 0.45 or 1)
+	if not done then
+		row.strike:Hide()
+		return
+	end
+	row.measure:SetText(row.edit:GetText())
+	row.strike:SetWidth(math.max(1, math.min(ITEM_W, row.measure:GetStringWidth())))
+	row.strike:Show()
+end
+
+local function CreateItemRow(f)
+	local row = CreateFrame("Frame", nil, f.listChild)
+	row:SetSize(TEXT_W, ITEM_H)
+
+	row.check = CreateFrame("Button", nil, row)
+	row.check:SetSize(12, 12)
+	row.check:SetPoint("LEFT", 2, 0)
+	S.Body(row.check, { 1, 1, 1, 0.35 }, INK)
+	row.check.pShadow:Hide()
+	row.check.tick = S.Texture(row.check, "ARTWORK", 0)
+	row.check.tick:SetPoint("TOPLEFT", 2, -2)
+	row.check.tick:SetPoint("BOTTOMRIGHT", -2, 2)
+	row.check.tick:SetVertexColor(INK[1], INK[2], INK[3], 0.85)
+	row.check:SetScript("OnClick", function()
+		local item = row.item
+		if not item then return end
+		item.done = not item.done or nil
+		if SOUNDKIT then
+			PlaySound(item.done and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON or SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF)
+		end
+		Touch(f.note)
+		RefreshItems(f)
+	end)
+
+	row.edit = ItemBox(row)
+	row.edit:SetPoint("LEFT", row.check, "RIGHT", 6, 0)
+	row.edit:SetWidth(ITEM_W)
+	row.edit:SetScript("OnTextChanged", function(self, userInput)
+		if userInput and row.item then
+			row.item.text = self:GetText()
+			Touch(f.note)
+		end
+		UpdateStrike(row)
+	end)
+	row.edit:SetScript("OnEnterPressed", function() f.addBox:SetFocus() end)
+	-- An item emptied by hand is removed.
+	row.edit:SetScript("OnEditFocusLost", function(self)
+		self:HighlightText(0, 0)
+		if row.item and Trim(self:GetText()) == "" and f.note and f.note.items then
+			table.remove(f.note.items, row.index)
+			Touch(f.note)
+			RefreshItems(f)
+		end
+	end)
+
+	row.strike = S.Texture(row, "OVERLAY", 0)
+	row.strike:SetHeight(1)
+	row.strike:SetPoint("LEFT", row.edit, "LEFT", 0, 0)
+	row.strike:SetVertexColor(INK[1], INK[2], INK[3], 0.6)
+	row.measure = row:CreateFontString(nil, "OVERLAY")
+	row.measure:SetFont(STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF", 12, "")
+	row.measure:Hide()
+
+	row.remove = InkButton(row, "x", 16)
+	row.remove:SetPoint("RIGHT", 0, 0)
+	row.remove.tooltip = "Remove this item."
+	row.remove:SetScript("OnClick", function()
+		if not row.item then return end
+		table.remove(f.note.items, row.index)
+		Touch(f.note)
+		RefreshItems(f)
+	end)
+	return row
+end
+
+RefreshItems = function(f)
+	local items = f.note and f.note.items
+	if not items then return end
+	local y = 0
+	for i, item in ipairs(items) do
+		local row = f.itemRows[i]
+		if not row then
+			row = CreateItemRow(f)
+			f.itemRows[i] = row
+		end
+		row.index, row.item = i, item
+		if row.edit:GetText() ~= item.text then
+			row.edit:SetText(item.text)
+			row.edit:SetCursorPosition(0)
+		end
+		row.check.tick:SetShown(item.done and true or false)
+		UpdateStrike(row)
+		row:ClearAllPoints()
+		row:SetPoint("TOPLEFT", 0, y)
+		row:Show()
+		y = y - ITEM_H
+	end
+	for i = #items + 1, #f.itemRows do
+		local row = f.itemRows[i]
+		row.item = nil
+		row:Hide()
+	end
+	f.addBox:ClearAllPoints()
+	f.addBox:SetPoint("TOPLEFT", 20, y)
+	f.listChild:SetHeight(-y + ITEM_H)
+	f.clear:SetShown(Progress(f.note) > 0)
+end
+
+ApplyMode = function(f)
+	local list = IsList(f.note)
+	if list and type(f.note.items) ~= "table" then f.note.items = {} end
+	f.edit:SetShown(not list)
+	f.listChild:SetShown(list)
+	f.scroll:SetScrollChild(list and f.listChild or f.edit)
+	f.scroll:SetVerticalScroll(0)
+	f.mode:SetOn(list)
+	if list then
+		RefreshItems(f)
+	else
+		f.clear:Hide()
+	end
+	UpdateScrollBar(f)
 end
 
 local function CreateNoteFrame()
@@ -260,7 +453,9 @@ local function CreateNoteFrame()
 	f.titleHint:SetTextColor(INK[1], INK[2], INK[3], 0.4)
 	f.titleHint:SetText("Title")
 	f.titleBox:SetScript("OnEscapePressed", f.titleBox.ClearFocus)
-	f.titleBox:SetScript("OnEnterPressed", function(self) f.edit:SetFocus() end)
+	f.titleBox:SetScript("OnEnterPressed", function()
+		if IsList(f.note) then f.addBox:SetFocus() else f.edit:SetFocus() end
+	end)
 	f.titleBox:SetScript("OnTextChanged", function(self, userInput)
 		f.titleHint:SetShown(self:GetText() == "")
 		if userInput and f.note then
@@ -329,6 +524,36 @@ local function CreateNoteFrame()
 			Touch(f.note)
 		end
 	end)
+	-- Checklist: rows of tick box + item text, and an "Add item" box at the end.
+	f.listChild = CreateFrame("Frame", nil, f.scroll)
+	f.listChild:SetSize(TEXT_W, ITEM_H)
+	f.listChild:Hide()
+	f.itemRows = {}
+	f.addBox = ItemBox(f.listChild)
+	f.addBox:SetWidth(ITEM_W)
+	f.addHint = S.Text(f.addBox, 12)
+	f.addHint:SetShadowOffset(0, 0)
+	f.addHint:SetPoint("LEFT")
+	f.addHint:SetTextColor(INK[1], INK[2], INK[3], 0.4)
+	f.addHint:SetText("+ Add item")
+	f.addBox:SetScript("OnTextChanged", function(self) f.addHint:SetShown(self:GetText() == "") end)
+	f.addBox:SetScript("OnEnterPressed", function(self)
+		local text = Trim(self:GetText())
+		if text == "" then
+			self:ClearFocus()
+			return
+		end
+		table.insert(f.note.items, { text = text })
+		self:SetText("")
+		Touch(f.note)
+		RefreshItems(f)
+		-- Keep the add box in view as the list grows.
+		C_Timer.After(0, function()
+			f.scroll:SetVerticalScroll(f.scroll:GetVerticalScrollRange())
+			UpdateScrollBar(f)
+		end)
+	end)
+
 	-- Keep the cursor in view while typing.
 	f.edit:SetScript("OnCursorChanged", function(_, _, y, _, h)
 		local top = -y
@@ -349,7 +574,9 @@ local function CreateNoteFrame()
 		UpdateScrollBar(f)
 	end)
 	-- Clicking the empty part of the paper puts the cursor in the text.
-	f.scroll:SetScript("OnMouseDown", function() f.edit:SetFocus() end)
+	f.scroll:SetScript("OnMouseDown", function()
+		if IsList(f.note) then f.addBox:SetFocus() else f.edit:SetFocus() end
+	end)
 
 	f.bar = S.ScrollBar(f, function(v) f.scroll:SetVerticalScroll(v) end)
 	f.bar:SetPoint("TOPRIGHT", -S.PAD + 4, -S.TITLE_H - 6)
@@ -385,8 +612,40 @@ local function CreateNoteFrame()
 	end)
 	f.swatch:SetScript("OnLeave", GameTooltip_Hide)
 
+	f.mode = InkButton(f, "List", 30)
+	f.mode:SetPoint("LEFT", f.swatch, "RIGHT", 8, 0)
+	f.mode.tooltip = "Switch between text and a checklist. Each line becomes an item, and back."
+	f.mode:SetScript("OnClick", function()
+		local note = f.note
+		if IsList(note) then
+			note.text = ItemsToText(note.items)
+			note.kind, note.items = nil, nil
+			f.edit:SetText(note.text)
+			f.textHint:SetShown(note.text == "")
+		else
+			note.items = TextToItems(note.text)
+			note.kind = "list"
+			note.text = ""
+			f.edit:SetText("")
+		end
+		Touch(note)
+		ApplyMode(f)
+	end)
+
+	f.clear = InkButton(f, "Clear ticked", 70)
+	f.clear.tooltip = "Remove the ticked items."
+	f.clear:SetScript("OnClick", function()
+		local items = f.note.items
+		for i = #items, 1, -1 do
+			if items[i].done then table.remove(items, i) end
+		end
+		Touch(f.note)
+		RefreshItems(f)
+	end)
+
 	f.delete = InkButton(f, "Delete", 46)
 	f.delete:SetPoint("BOTTOMRIGHT", -S.PAD + 4, 7)
+	f.clear:SetPoint("RIGHT", f.delete, "LEFT", -4, 0)
 	f.delete:SetScript("OnClick", function()
 		local note = f.note
 		ns.Confirm(("Delete the note \"%s\"?"):format(Label(note)), function() M.Delete(note.id) end)
@@ -395,6 +654,8 @@ local function CreateNoteFrame()
 	f:SetScript("OnHide", function(self)
 		self.titleBox:ClearFocus()
 		self.edit:ClearFocus()
+		self.addBox:ClearFocus()
+		for _, row in ipairs(self.itemRows) do row.edit:ClearFocus() end
 		if areaPanel and areaPanel.owner == self then areaPanel:Hide() end
 	end)
 	f:SetScript("OnMouseDown", function(self) self:Raise() end)
@@ -414,7 +675,8 @@ OpenNote = function(id)
 		f.edit:SetText(note.text or "")
 		f.titleHint:SetShown((note.title or "") == "")
 		f.textHint:SetShown((note.text or "") == "")
-		f.scroll:SetVerticalScroll(0)
+		f.addBox:SetText("")
+		ApplyMode(f)
 		ApplyPaper(f)
 		ApplyPin(f)
 		ApplyAreaTag(f)
@@ -637,6 +899,10 @@ local function Tags(note)
 	if note.pinned then tags[#tags + 1] = "|cff4fc3f7pinned|r" end
 	if HasArea(note) then tags[#tags + 1] = "|cffffd100area|r" end
 	if not note.owner then tags[#tags + 1] = "|cff40ff40shared|r" end
+	if IsList(note) then
+		local done, total = Progress(note)
+		tags[#tags + 1] = ("|cffd9c79a%d/%d|r"):format(done, total)
+	end
 	tags[#tags + 1] = S.DIM .. Ago(note.updated) .. "|r"
 	return table.concat(tags, "  ")
 end
@@ -686,7 +952,21 @@ local function Row_OnEnter(self)
 	if not self.note then return end
 	GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 	GameTooltip:SetText(Label(self.note), 1, 0.95, 0.85)
-	if self.note.text ~= "" then GameTooltip:AddLine(self.note.text:sub(1, 300), 0.9, 0.9, 0.9, true) end
+	if IsList(self.note) then
+		for i, item in ipairs(self.note.items) do
+			if i > 15 then
+				GameTooltip:AddLine(("... and %d more"):format(#self.note.items - 15), 0.6, 0.6, 0.6)
+				break
+			end
+			if item.done then
+				GameTooltip:AddLine("[x] " .. item.text, 0.5, 0.5, 0.5)
+			else
+				GameTooltip:AddLine("[  ] " .. item.text, 0.9, 0.9, 0.9)
+			end
+		end
+	elseif self.note.text ~= "" then
+		GameTooltip:AddLine(self.note.text:sub(1, 300), 0.9, 0.9, 0.9, true)
+	end
 	local areas = {}
 	for name in pairs(self.note.zones or {}) do areas[#areas + 1] = name end
 	if self.note.capitals then areas[#areas + 1] = "any capital city" end
@@ -745,14 +1025,18 @@ local function BuildList()
 		listFrame.scrollBar:SetValue(math.max(0, math.min(MaxOffset(), offset - delta * 2)))
 	end)
 
-	local new = S.Button(listFrame, "New note", 110, 22)
+	local new = S.Button(listFrame, "New note", 86, 22)
 	new:SetPoint("BOTTOMLEFT", S.PAD, 12)
 	new:SetScript("OnClick", function() M.New() end)
+	local newList = S.Button(listFrame, "New list", 86, 22)
+	newList:SetPoint("LEFT", new, "RIGHT", 6, 0)
+	newList:SetScript("OnClick", function() M.New(nil, "list") end)
+	newList.tooltip = "A checklist: add items and tick them off (shopping lists...)."
 
 	listFrame.hint = S.Text(listFrame, 10)
 	listFrame.hint:SetPoint("BOTTOMRIGHT", -S.PAD, 18)
 	listFrame.hint:SetTextColor(0.5, 0.5, 0.5)
-	listFrame.hint:SetText("Right-click a note to delete it")
+	listFrame.hint:SetText("Right-click: delete")
 
 	listFrame:SetScript("OnShow", RefreshList)
 end
@@ -784,7 +1068,11 @@ local function BuildFloatButton()
 	b.count:SetPoint("BOTTOMRIGHT", 0, 1)
 
 	b:SetScript("OnClick", function(_, button)
-		if button == "RightButton" then M.New() else M.ToggleList() end
+		if button == "RightButton" then
+			if IsShiftKeyDown() then M.New(nil, "list") else M.New() end
+		else
+			M.ToggleList()
+		end
 	end)
 	b:SetScript("OnDragStart", function(self)
 		GameTooltip_Hide()
@@ -799,6 +1087,7 @@ local function BuildFloatButton()
 		GameTooltip:SetText("Notes")
 		GameTooltip:AddLine(("%d note(s)"):format(#SortedNotes()), 1, 1, 1)
 		GameTooltip:AddLine("Click: list. Right-click: new note.", 0.5, 0.5, 0.5)
+		GameTooltip:AddLine("Shift-right-click: new checklist.", 0.5, 0.5, 0.5)
 		GameTooltip:AddLine("Drag to move. Hide it in /notes options.", 0.5, 0.5, 0.5)
 		GameTooltip:Show()
 	end)
@@ -824,12 +1113,18 @@ function M.ToggleList()
 	if listFrame:IsShown() then listFrame:Hide() else listFrame:Show() end
 end
 
-function M.New(text)
-	local note = NewNote(text)
+function M.New(text, kind)
+	local note = NewNote(text, kind)
 	local f = OpenNote(note.id)
 	if listFrame:IsShown() then RefreshList() end
 	UpdateFloatButton()
-	if text and text ~= "" then f.edit:SetFocus() else f.titleBox:SetFocus() end
+	if kind == "list" then
+		if #note.items > 0 then f.addBox:SetFocus() else f.titleBox:SetFocus() end
+	elseif text and text ~= "" then
+		f.edit:SetFocus()
+	else
+		f.titleBox:SetFocus()
+	end
 	return note
 end
 
@@ -863,6 +1158,8 @@ local function OnSlash(msg)
 		M.ToggleList()
 	elseif cmd == "new" then
 		M.New(rest)
+	elseif cmd == "newlist" or cmd == "checklist" then
+		M.New(rest, "list")
 	elseif cmd == "where" then
 		local zone, sub, mapID = CurrentPlace()
 		M.Say(("zone: %s, subzone: %s, map ID: %s%s"):format(zone or "-", sub or "-", tostring(mapID or "-"),
@@ -880,7 +1177,7 @@ local function OnSlash(msg)
 	elseif cmd == "options" then
 		ns.OpenSettings(M)
 	else
-		M.Say("/notes - list, /notes new [text], /notes where, /notes test, /notes button, /notes reset, /notes options")
+		M.Say("/notes - list, /notes new [text], /notes newlist [milk, eggs], /notes where, /notes test, /notes button, /notes reset, /notes options")
 	end
 end
 
@@ -913,6 +1210,7 @@ function M:Enable()
 			note.title = note.title or ""
 			note.text = note.text or ""
 			note.zones = type(note.zones) == "table" and note.zones or {}
+			if note.kind == "list" and type(note.items) ~= "table" then note.items = {} end
 			if id >= db.nextID then db.nextID = id + 1 end
 		end
 	end
