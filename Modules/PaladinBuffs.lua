@@ -10,7 +10,7 @@
 --   * Seal: shown while any seal is on you (every rank of every seal), with its
 --     time left as a swipe, like the manager's own buff icons. It flashes in
 --     its last seconds (4 by default). In combat with no seal on, your last
---     seal shows faded and flashing, as a reminder to put one up.
+--     seal shows tinted red and flashing, as a reminder to put one up.
 --   * Righteous Fury: shown, tinted red, while you're in a dungeon or raid
 --     (or in any group with a shield on), know the spell and don't have it on. It's a reminder, so it disappears as
 --     soon as you cast it. While it's on, it shows (flashing, with its time
@@ -50,7 +50,7 @@ local M = ns.NewModule("paladin", {
 	notes = "Shows your active seal next to the Cooldown Manager's buff icons, and a Righteous Fury reminder in dungeons, raids, and groups when you have a shield on.",
 	defaults = {
 		seal = true, fury = true,
-		flashMissing = true,   -- in combat with no seal on: show the last seal, faded, flashing
+		flashMissing = true,   -- in combat with no seal on: show the last seal, red, flashing
 		flashExpiring = true, warnSeconds = 4,
 		furyExpiring = true, furyWarnSeconds = 10,
 		glow = true,           -- proc glow while running out or missing
@@ -64,7 +64,7 @@ local RIGHTEOUS_FURY = 25780
 local DEFAULT_POINT = { "CENTER", "CENTER", 0, -120 }
 local BASE_SIZE = 40           -- CooldownViewerBuffIconItemTemplate's size
 local TEST_SECONDS = 15
-local FURY_TINT = { 1, 0.35, 0.35 }
+local MISSING_TINT = { 1, 0.35, 0.35 }
 local FLASH_ALPHA = 0.25        -- lowest alpha of the flash
 local FLASH_SECONDS = 0.35      -- one fade, out or in
 
@@ -580,7 +580,7 @@ local function Update()
 	end
 
 	-- Seal: active (flashing in its last seconds), or missing in combat
-	-- (the last seal you used, faded and flashing).
+	-- (the last seal you used, red and flashing).
 	local sealID, missing, flash
 	local now = GetTime()
 	if testing then
@@ -600,7 +600,7 @@ local function Update()
 			sealIcon.Cooldown:Clear()
 		end
 	end
-	-- No seal in combat: the last seal, faded, flashing and glowing.
+	-- No seal in combat: the last seal, red, flashing and glowing.
 	local missingID = not testing and isPaladin and not seal and InCombat()
 		and not UnitIsDeadOrGhost("player") and MissingSealID()
 	if missingID and db.seal and db.flashMissing then
@@ -612,7 +612,12 @@ local function Update()
 		sealIcon.Icon:SetTexture(SpellIcon(sealID))
 		sealIcon.spellID = sealID
 	end
-	sealIcon.Icon:SetDesaturated(missing and true or false)
+	-- Missing: tinted red, like the Righteous Fury reminder.
+	if missing then
+		sealIcon.Icon:SetVertexColor(MISSING_TINT[1], MISSING_TINT[2], MISSING_TINT[3])
+	else
+		sealIcon.Icon:SetVertexColor(1, 1, 1)
+	end
 	SetFlashing(sealIcon, flash and true or false)
 	SetGlow(sealIcon, db.glow and flash and true or false)
 	sealIcon:SetShown(sealID ~= nil)
@@ -640,7 +645,7 @@ local function Update()
 		furyIcon.Icon:SetVertexColor(1, 1, 1)
 	else
 		furyIcon.Cooldown:Clear()
-		furyIcon.Icon:SetVertexColor(FURY_TINT[1], FURY_TINT[2], FURY_TINT[3])
+		furyIcon.Icon:SetVertexColor(MISSING_TINT[1], MISSING_TINT[2], MISSING_TINT[3])
 	end
 	SetFlashing(furyIcon, furyFlash)
 	SetGlow(furyIcon, db.glow and (furyMissing or furyFlash))
@@ -736,7 +741,7 @@ end
 
 M.options = {
 	{ type = "checkbox", key = "seal", label = "Active seal", tooltip = "Show your seal while it's on you, with its time left.", onChange = Update },
-	{ type = "checkbox", key = "flashMissing", label = "Flash when the seal is missing", tooltip = "In combat with no seal on, show your last seal faded and flashing.", onChange = Update },
+	{ type = "checkbox", key = "flashMissing", label = "Flash when the seal is missing", tooltip = "In combat with no seal on, show your last seal tinted red and flashing.", onChange = Update },
 	{ type = "checkbox", key = "flashExpiring", label = "Flash before the seal runs out", tooltip = "Flash the seal in its last seconds.", onChange = Update },
 	{ type = "slider", key = "warnSeconds", label = "Flash in the last", min = 1, max = 10, step = 1, format = function(v) return ("%d s"):format(v) end, tooltip = "How many seconds before the seal runs out it starts flashing.", onChange = Update },
 	{ type = "checkbox", key = "fury", label = "Righteous Fury reminder", tooltip = "In dungeons and raids, or in a group with a shield on, show Righteous Fury while it's missing.", onChange = Update },
@@ -824,7 +829,7 @@ function M:Enable()
 	furyIcon = NewIcon()
 	furyIcon.spellID = RIGHTEOUS_FURY
 	furyIcon.Icon:SetTexture(SpellIcon(RIGHTEOUS_FURY))
-	furyIcon.Icon:SetVertexColor(FURY_TINT[1], FURY_TINT[2], FURY_TINT[3])
+	furyIcon.Icon:SetVertexColor(MISSING_TINT[1], MISSING_TINT[2], MISSING_TINT[3])
 
 	CacheSealNames()
 	HookViewer()
