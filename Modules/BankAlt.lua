@@ -6,7 +6,8 @@
 --     the set percentage above the vendor price) get a gold coin on the icon,
 --     a gold glow, or both. It compares one item's prices, so it works the same
 --     for copper herbs and gold-priced gear. Items with an AH price but no
---     vendor price count as valuable; items with no AH price never do. The
+--     vendor price count as valuable; items with no AH price never do, and
+--     grey items never have one (ns.AuctionPrice skips them). The
 --     coin is coloured by how far above vendor it is (see TIERS).
 --   * Ctrl+Alt+right-click an item in your bags to ignore it (no marks at all,
 --     left out of /bankalt list); db.ignored holds the item IDs.

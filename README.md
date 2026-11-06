@@ -31,6 +31,7 @@ Marks items in your bags and bank so you can see at a glance what to mail to you
 - **Padlock** on soulbound items and a **scroll** on items your current quests need.
 - An **"AH vs vendor"** line in item tooltips, under Auctionator's prices.
 - Items cheaper than a minimum auction house price (10c by default) are left alone.
+- Grey (poor) items never count as valuable: their AH price is ignored everywhere in PredUI.
 - `/bankalt list` prints everything in your bags worth sending, with the total.
 - **Ignore** an item (a profession tool you will never sell, say) with Ctrl+Alt+right-click in your bags: it gets no marks at all. Do it again to undo; `/bankalt ignored` lists them.
 
@@ -42,7 +43,7 @@ Marks items in your bags and bank so you can see at a glance what to mail to you
 
 When you loot with full bags, a window next to the loot window lists your lowest-value items, and says whether each loot item is worth more (Better / Same / Worse) than the cheapest of them.
 
-- **Value by** vendor price, Auctionator price, or the higher of the two (`/lootroom sort vendor|ah|best`). Prices from the auction house are marked "AH". Soulbound items, and items Auctionator has no price for, use the vendor price.
+- **Value by** vendor price, Auctionator price, or the higher of the two (`/lootroom sort vendor|ah|best`). Prices from the auction house are marked "AH". Soulbound items, grey items, and items Auctionator has no price for use the vendor price.
 - **List any time** with `/lootroom show` (or "Show list" in the settings) to clear out junk without looting. Drag that window wherever you like; `/lootroom reset` puts it back.
 - Click an item to delete it (it asks first). Right-click for "Never offer this item"; `/lootroom unhide` offers them again.
 - Quest items and items in profession bags are never listed. Loot that fits onto a stack you already have doesn't open the window.

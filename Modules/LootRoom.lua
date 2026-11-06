@@ -14,7 +14,7 @@
 --     saved list (shared by all characters) and it's skipped from then on.
 --     The settings page can clear the list.
 --   * "Value" can be the vendor price, the Auctionator price, or the higher of
---     the two. Soulbound items and items with no Auctionator data fall back to
+--     the two. Soulbound items, grey items and items with no Auctionator data fall back to
 --     the vendor price; without Auctionator everything uses the vendor price.
 --     Values taken from the AH are marked "AH" in the window.
 --   * /lootroom show (or the settings button) opens the same list any time,

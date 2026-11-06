@@ -50,9 +50,14 @@ end
 
 -- Auctionator's price for one of an item, or nil (no Auctionator, no data).
 -- Auctionator is an optional dependency, so it may be missing.
+-- Grey (Poor) items never get an AH price: they're vendor junk, and the odd
+-- listing for one is noise. Every module goes through here, so they all agree.
+local POOR = (Enum.ItemQuality and Enum.ItemQuality.Poor) or 0
+
 function ns.AuctionPrice(link)
 	local api = Auctionator and Auctionator.API and Auctionator.API.v1
 	if not (api and api.GetAuctionPriceByItemLink and ns.PublicString(link)) then return end
+	if ns.PublicNumber(ns.Try(C_Item.GetItemQualityByID, link)) == POOR then return end
 	return ns.PublicNumber(ns.Try(api.GetAuctionPriceByItemLink, "PredUI", link))
 end
 
