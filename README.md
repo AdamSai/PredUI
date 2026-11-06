@@ -15,7 +15,7 @@ Every part is a module you can turn on or off. Open the settings with `/predui` 
 | **Bag Value** | Shows the vendor sell value of each item on its icon in your bags and bank, plus the total for your bags. | `/bagvalue` |
 | **Bank Alt** | Marks what's worth sending to your bank alt: BoE items, valuable items, trash, soulbound and quest items (see below). | `/bankalt` |
 | **Icon Search** | Search every macro icon by name or file ID and apply it to a macro or equipment set. | `/iconsearch` |
-| **Loot Room** | When your bags are full, shows your lowest-value items next to the loot window so you can free a slot. | `/lootroom` |
+| **Loot Room** | When your bags are full, shows your lowest-value items next to the loot window so you can free a slot, by vendor or AH price. `/lootroom show` lists them any time, to clear out junk (see below). | `/lootroom` |
 | **Mail Ledger** | Shows how much gold you looted from the mailbox, where it came from and what is still waiting. Can open the mailbox on Send Mail, addressed to your default alt. | `/mledger` |
 | **Hidden Settings** | Game settings that aren't in the Options menu: denser grass, longer foliage distance, weather, screen effects and more. | `/hiddensettings` |
 | **Paladin Buffs** | Shows your active seal next to the Cooldown Manager's buff icons (flashing and glowing as it runs out or when it's missing in combat), and a Righteous Fury reminder in dungeons, raids, and groups when you have a shield on. | `/palbuffs` |
@@ -32,10 +32,22 @@ Marks items in your bags and bank so you can see at a glance what to mail to you
 - An **"AH vs vendor"** line in item tooltips, under Auctionator's prices.
 - Items cheaper than a minimum auction house price (10c by default) are left alone.
 - `/bankalt list` prints everything in your bags worth sending, with the total.
+- **Ignore** an item (a profession tool you will never sell, say) with Ctrl+Alt+right-click in your bags: it gets no marks at all. Do it again to undo; `/bankalt ignored` lists them.
 
 <img src="docs/screenshots/bank-alt-bags.png" alt="Bank Alt marks in Baganator: padlocks on soulbound items, scrolls on quest items" width="420"> <img src="docs/screenshots/ah-vs-vendor.png" alt="AH vs vendor line in the item tooltip" width="274">
 
 <img src="docs/screenshots/settings-bankalt.png" alt="Bank Alt settings" width="640">
+
+### Loot Room
+
+When you loot with full bags, a window next to the loot window lists your lowest-value items, and says whether each loot item is worth more (Better / Same / Worse) than the cheapest of them.
+
+- **Value by** vendor price, Auctionator price, or the higher of the two (`/lootroom sort vendor|ah|best`). Prices from the auction house are marked "AH". Soulbound items, and items Auctionator has no price for, use the vendor price.
+- **List any time** with `/lootroom show` (or "Show list" in the settings) to clear out junk without looting. Drag that window wherever you like; `/lootroom reset` puts it back.
+- Click an item to delete it (it asks first). Right-click for "Never offer this item"; `/lootroom unhide` offers them again.
+- Quest items and items in profession bags are never listed. Loot that fits onto a stack you already have doesn't open the window.
+
+<img src="docs/screenshots/loot-room-list.png" alt="Loot Room list of lowest-value items, valued by AH price" width="400">
 
 ### Mail Ledger
 
@@ -64,7 +76,7 @@ Post-it notes in four paper colours, with a list of all your notes and a floatin
 All optional; PredUI runs without them.
 
 - [Baganator](https://www.curseforge.com/wow/addons/baganator): Bank Alt hooks Baganator's bag, bank and other-character views. Its coin/trash, padlock and quest scroll are Baganator corner icons you can move in Baganator's icon settings.
-- [Auctionator](https://www.curseforge.com/wow/addons/auctionator): auction prices for Bank Alt and the tooltip line.
+- [Auctionator](https://www.curseforge.com/wow/addons/auctionator): auction prices for Bank Alt, the tooltip line and Loot Room's AH sorting.
 
 ## Install
 
