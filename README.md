@@ -16,7 +16,7 @@ Every part is a module you can turn on or off. Open the settings with `/predui` 
 | **Bank Alt** | Marks what's worth sending to your bank alt: BoE items, valuable items, trash, soulbound and quest items (see below). | `/bankalt` |
 | **Icon Search** | Search every macro icon by name or file ID and apply it to a macro or equipment set. | `/iconsearch` |
 | **Loot Room** | When your bags are full, shows your lowest-value items next to the loot window so you can free a slot, by vendor or AH price. `/lootroom show` lists them any time, to clear out junk (see below). | `/lootroom` |
-| **Mail Ledger** | Shows how much gold you looted from the mailbox, where it came from and what is still waiting. Can open the mailbox on Send Mail, addressed to your default alt. | `/mledger` |
+| **Mail Ledger** | Shows how much gold you looted from the mailbox, where it came from and what is still waiting. Can open the mailbox on Send Mail, addressed to your default alt, with a list of what's worth sending by AH value. | `/mledger` |
 | **Hidden Settings** | Game settings that aren't in the Options menu: denser grass, longer foliage distance, weather, screen effects and more. | `/hiddensettings` |
 | **Paladin Buffs** | Shows your active seal next to the Cooldown Manager's buff icons (flashing and glowing as it runs out or when it's missing in combat), and a Righteous Fury reminder in dungeons, raids, and groups when you have a shield on. | `/palbuffs` |
 | **Notes** | Post-it notes and checklists for reminders. Keep a list of notes, pin one to keep it on screen, or have it open by itself when you enter a zone or any capital city. A floating button (optional) opens the list. | `/notes` |
@@ -55,6 +55,13 @@ When you loot with full bags, a window next to the loot window lists your lowest
 ### Mail Ledger
 
 <img src="docs/screenshots/mail-ledger.png" alt="Mail Ledger panel next to the inbox" width="480"> <img src="docs/screenshots/mail-send.png" alt="Mail Ledger with Send Mail addressed to the default alt" width="480">
+
+**Worth sending** opens with the mailbox and lists the items in your bags worth sending to your bank alt, most valuable stack first (Auctionator price x count), with how far each AH price is above or below the vendor price.
+- Click an item to attach it to the mail; **Attach top N** fills the mail's free slots.
+- It follows Bank Alt's rules: no soulbound, ignored or quest items, nothing under its Min AH price. Items with no AH price aren't listed.
+- Not shown on the bank alt itself. `/mledger list` shows or hides it.
+
+<img src="docs/screenshots/mail-worth-sending.png" alt="Worth sending list next to Send Mail, sorted by AH value with % over vendor" width="560">
 
 ### Flight Timer
 

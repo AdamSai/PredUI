@@ -5,6 +5,7 @@
 -- MailLedgerUI.lua: the panel beside the mailbox, and its PredUI minimap button lines.
 -- MailSubject.lua: fills in the subject of money-only mail.
 -- MailSend.lua: opens on Send Mail, addressed to your default alt.
+-- MailSendList.lua: the "Worth sending" list left of the mailbox.
 --
 -- Accounting rule: gold only counts once the character's money has really
 -- changed by the amount of a mail that was taken. Taking a mail just queues an
@@ -33,6 +34,7 @@ L.DEFAULT_SETTINGS = {
 	warnDays = 5,        -- warn at login about mail expiring within this many days
 	autoSubject = true,  -- fill the subject of money-only mail
 	openSend = false,    -- open the mailbox on the Send Mail tab
+	sendList = true,     -- show the "Worth sending" list with the mailbox
 	-- sendTo = { [realm] = "Alt" }: the default recipient, set per realm
 }
 
@@ -601,6 +603,7 @@ function handlers.MAIL_SHOW()
 	L.OnMailShow()
 	L.BuildSendSubject()
 	L.OnMailShowSend()
+	L.OnMailShowList()
 	L.RequestRefresh()
 end
 
@@ -610,6 +613,7 @@ end
 
 function handlers.MAIL_CLOSED()
 	L.OnMailClosed()
+	L.OnMailClosedList()
 	if not L.visit or L.visitSummarised == L.visit then return end
 	L.visitSummarised = L.visit
 	if L.Setting("chatSummary") then
@@ -700,6 +704,8 @@ local function OnSlash(input)
 		ToggleSetting("autoShow", "open with mailbox")
 	elseif command == "minimap" then
 		ns.ToggleMinimapButton()
+	elseif command == "list" then
+		L.ToggleSendList()
 	elseif command == "send" then
 		ToggleSetting("openSend", "open on Send Mail")
 	elseif command == "sendto" then
@@ -708,7 +714,8 @@ local function OnSlash(input)
 		ToggleSetting("autoSubject", "subject autofill")
 	elseif command == "resetpos" then
 		L.ResetPosition()
-		L.Print("panel re-attached to the mailbox.")
+		L.ResetSendListPosition()
+		L.Print("panels re-attached to the mailbox.")
 	elseif command == "options" then
 		ns.OpenSettings(L)
 	else
@@ -717,11 +724,12 @@ local function OnSlash(input)
 		print("  /mledger alts: gold and waiting mail on every character on this realm")
 		print("  /mledger chat: toggle the summary when you leave the mailbox")
 		print("  /mledger auto: toggle opening the panel with the mailbox")
+		print("  /mledger list: show or hide the worth-sending list")
 		print("  /mledger send: toggle opening the mailbox on Send Mail")
 		print("  /mledger sendto <name>: default recipient on this realm (no name clears it)")
 		print("  /mledger minimap: show or hide the PredUI minimap button")
 		print("  /mledger subject: toggle filling the subject of money-only mail")
-		print("  /mledger resetpos: re-attach the panel after dragging it")
+		print("  /mledger resetpos: re-attach the panels after dragging them")
 		print("  /mledger options: open the settings")
 	end
 end
@@ -746,6 +754,7 @@ L.options = {
 	SettingOption("checkbox", "chatSummary", "Chat summary", "Print what you looted when you leave the mailbox."),
 	SettingOption("checkbox", "autoSubject", "Fill money-only subjects", "When a mail only carries gold, put the amount in the subject."),
 	SettingOption("checkbox", "openSend", "Open on Send Mail", "Open the mailbox on the Send Mail tab instead of the Inbox. Not on the default recipient itself, which is the one collecting."),
+	SettingOption("checkbox", "sendList", "Worth-sending list", "Left of the mailbox: items in your bags worth sending to your bank alt, by AH value (Auctionator), most valuable first. Click one to attach it."),
 	SettingOption("dropdown", "sendTo", "Default recipient", "Filled in as the recipient whenever Send Mail is empty, and again after each send. Set per realm; /mledger sendto <name> takes any name.", {
 		default = "",
 		get = function() return L.SendTargetSetting() or "" end,

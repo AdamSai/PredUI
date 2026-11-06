@@ -766,6 +766,16 @@ local function ListItems()
 	end
 end
 
+-- For Mail Ledger's "Worth sending" list (MailSendList.lua): stack AH value
+-- and % over vendor when an item can go to the bank alt (not bound, ignored or
+-- needed for a quest, and has an AH price above Min AH price), else nil.
+function M.SendCandidate(link, isBound, count, hasNoValue, bag, slot)
+	if not db or IsIgnored(link) or IsQuestNeeded(link, bag, slot) then return nil end
+	local boe, _, value, percent = Classify(link, isBound, count, hasNoValue)
+	if boe == nil or not value or value <= 0 then return nil end
+	return value, percent
+end
+
 local function ListIgnored()
 	local ids = {}
 	for id in pairs(db.ignored) do ids[#ids + 1] = id end

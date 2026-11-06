@@ -124,6 +124,11 @@ local function IsSelf(name)
 	return name and L.char and SameName(name, L.FullName(L.char))
 end
 
+-- True on the default recipient itself (the character collecting mail).
+function L.IsSendTargetSelf()
+	return IsSelf(L.SendTargetSetting()) and true or false
+end
+
 -- The alt to fill in, or nil (none set, or we are that alt).
 function L.SendTarget()
 	local name = L.SendTargetSetting()
