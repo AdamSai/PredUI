@@ -28,12 +28,12 @@ Marks items in your bags and bank so you can see at a glance what to mail to you
 - **Glow** on Bind on Equip items that aren't soulbound yet (colour of your choice; optionally Bind on Use too).
 - **Valuable** items (the Auctionator price is at least a set % above the vendor price, +50% by default) get a coin, a glow along the bottom of the icon, or both. The colour shows how much more the auction house pays: green, blue (+100%), purple (+300%), orange (+1000%).
 - **Trash can** on items whose auction house price is barely above the vendor price (under +20% by default): just vendor them.
-- **Padlock** on soulbound items and a **"!"** on items your current quests need.
+- **Padlock** on soulbound items and a **scroll** on items your current quests need.
 - An **"AH vs vendor"** line in item tooltips, under Auctionator's prices.
 - Items cheaper than a minimum auction house price (10c by default) are left alone.
 - `/bankalt list` prints everything in your bags worth sending, with the total.
 
-<img src="docs/screenshots/bank-alt-bags.png" alt="Bank Alt marks in Baganator: padlocks, quest marks, trash cans" width="420"> <img src="docs/screenshots/ah-vs-vendor.png" alt="AH vs vendor line in the item tooltip" width="274">
+<img src="docs/screenshots/bank-alt-bags.png" alt="Bank Alt marks in Baganator: padlocks on soulbound items, scrolls on quest items" width="420"> <img src="docs/screenshots/ah-vs-vendor.png" alt="AH vs vendor line in the item tooltip" width="274">
 
 <img src="docs/screenshots/settings-bankalt.png" alt="Bank Alt settings" width="640">
 
@@ -60,7 +60,7 @@ Post-it notes in four paper colours, with a list of all your notes and a floatin
 
 All optional; PredUI runs without them.
 
-- [Baganator](https://www.curseforge.com/wow/addons/baganator): Bank Alt hooks Baganator's bag, bank and other-character views. Its coin/trash, padlock and "!" are Baganator corner icons you can move in Baganator's icon settings.
+- [Baganator](https://www.curseforge.com/wow/addons/baganator): Bank Alt hooks Baganator's bag, bank and other-character views. Its coin/trash, padlock and quest scroll are Baganator corner icons you can move in Baganator's icon settings.
 - [Auctionator](https://www.curseforge.com/wow/addons/auctionator): auction prices for Bank Alt and the tooltip line.
 
 ## Install

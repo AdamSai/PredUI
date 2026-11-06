@@ -43,7 +43,7 @@ local M = ns.NewModule("bankalt", {
 		minPrice = 10,           -- copper: below this AH price (one item) no coin and no tooltip line
 		tierColors = true,       -- colour the coin by how far the AH price is above vendor
 		lockBound = true,        -- padlock on soulbound items
-		questMark = true,        -- "!" on items your current quests need
+		questMark = true,        -- scroll on items your current quests need
 		tooltipPercent = true,   -- "AH vs vendor" line under Auctionator's prices
 	},
 })
@@ -54,6 +54,7 @@ local COIN_SIZE = 14
 local LOCK_SIZE = 18
 local LOCK_COLOR = { 0.35, 1.00, 0.35 }
 local QUEST_SIZE = 18
+local QUEST_COLOR = { 1.00, 0.82, 0.20 }
 local TRASH_SIZE = 17
 local TRASH_COLOR = { 1.00, 0.45, 0.40 }
 local BOTTOM_ALPHA = 0.85      -- strength of the bottom gradient at the icon's edge
@@ -278,10 +279,11 @@ local function SetTrashTexture(tex)
 	tex:SetVertexColor(TRASH_COLOR[1], TRASH_COLOR[2], TRASH_COLOR[3])
 end
 
+-- Our own quest scroll (Media\Quest.tga), tinted quest yellow. Not the
+-- game's "!", which already means "this item starts a quest".
 local function SetQuestTexture(tex)
-	if not tex:SetAtlas("QuestNormal") then
-		tex:SetTexture("Interface\\GossipFrame\\AvailableQuestIcon")
-	end
+	tex:SetTexture(S.MEDIA .. "Quest")
+	tex:SetVertexColor(QUEST_COLOR[1], QUEST_COLOR[2], QUEST_COLOR[3])
 end
 
 -- Grey the coin and tint it with the tier colour, or leave it gold.
@@ -367,7 +369,7 @@ local function ClearButton(button)
 	end
 end
 
--- drawIcons: false on Baganator buttons, where the coin, lock and "!" are its
+-- drawIcons: false on Baganator buttons, where the coin, lock and scroll are its
 -- corner widgets.
 local function Draw(button, boe, valuable, drawIcons, percent, bound, quest)
 	local color, coin, bottom, trash = Look(boe, valuable, percent)
@@ -479,7 +481,7 @@ local function UpdateBaganatorButton(button, details)
 		end)
 		return
 	end
-	-- Coin, trash can, lock and "!" are Baganator corner widgets; here only
+	-- Coin, trash can, lock and scroll are Baganator corner widgets; here only
 	-- the glow and the bottom gradient.
 	Draw(button, boe, valuable, false, percent)
 end
@@ -561,7 +563,7 @@ local function SetupBaganator()
 			end,
 			{ corner = "bottom_left", priority = 99 }, true)
 
-		-- "!" on items your current quests need. First in the top right corner.
+		-- Scroll on items your current quests need. First in the top right corner.
 		ns.Try(api.RegisterCornerWidget, "PredUI: quest item", "predui_quest",
 			function(_, details)
 				if not (M.enabled and details.itemLink) then return false end
@@ -806,7 +808,7 @@ M.options = {
 	{ type = "slider", key = "trashPercent", label = "Trash below", min = 0, max = 200, step = 5, tooltip = "Items whose AH price is less than this % above the vendor price get the trash can. Any amount: /bankalt trash N.", onChange = Changed,
 		format = function(v) return "+" .. math.floor(v + 0.5) .. "%" end },
 	{ type = "header", label = "Other" },
-	{ type = "checkbox", key = "questMark", label = "\"!\" on quest items", tooltip = "A yellow \"!\" on items your current quests need, including ones you've already collected enough of (you still need them to hand in). In Baganator it's the \"PredUI: quest item\" corner icon.", onChange = Changed },
+	{ type = "checkbox", key = "questMark", label = "Scroll on quest items", tooltip = "A yellow scroll on items your current quests need, including ones you've already collected enough of (you still need them to hand in). In Baganator it's the \"PredUI: quest item\" corner icon.", onChange = Changed },
 	{ type = "checkbox", key = "lockBound", label = "Padlock on soulbound items", tooltip = "A small padlock on soulbound items, so you can see what can't go to an alt. In Baganator it's the \"PredUI: soulbound\" corner icon.", onChange = Changed },
 	{ type = "checkbox", key = "tooltipPercent", label = "AH vs vendor in tooltips", tooltip = "Adds how much more (or less) the AH price is than the vendor price, under Auctionator's price lines.", },
 	{ type = "button", label = "Items to send", button = "List", tooltip = "Lists what in your bags is worth sending to your bank alt. Also /bankalt list.", func = ListItems },
