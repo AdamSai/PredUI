@@ -15,6 +15,9 @@
 --     one starts) is measured during bulk crafts and saved account-wide. Until a
 --     recipe has been measured, its time is the spell's cast time plus a typical
 --     gap, and is shown with a "~".
+--   * Cast events are matched by castGUID, like Blizzard's cast bar does. A new
+--     craft pressed while the last one is still casting starts a new run, and
+--     the old cast's end (interrupt, success, queue stop) mustn't end that run.
 --------------------------------------------------------------------------------
 
 local _, ns = ...
@@ -181,11 +184,19 @@ local function UpdateBar()
 	end
 end
 
+-- The castGUID of the player's cast in progress, if any.
+local function CurrentCastGUID()
+	local castGUID = select(7, Try(UnitCastingInfo, "player"))
+	return Public(castGUID) and castGUID or nil
+end
+
 local function StartRun(spellID, name, icon, count, test)
 	local per, measured = PerCraft(spellID)
 	run = {
 		spellID = spellID, name = name or "Crafting", total = count, done = 0,
 		per = per or 3, measured = measured, started = GetTime(), test = test,
+		-- A cast still going when this run was asked for belongs to the last run.
+		oldCast = not test and CurrentCastGUID() or nil,
 	}
 	bar.icon:SetTexture(icon or 134400)
 	bar:SetColor(AMBER[1], AMBER[2], AMBER[3])
@@ -303,8 +314,8 @@ end
 
 -- The repeat queue stopped (out of materials, moved, etc.). The last craft's
 -- SUCCEEDED can arrive around the same time, so give it a moment.
-local function CheckStopped()
-	if run and not run.finished and not run.test and not CurrentCastLeft(run.spellID) then
+local function CheckStopped(stoppedRun)
+	if run and run == stoppedRun and not run.finished and not run.test and not CurrentCastLeft(run.spellID) then
 		FinishRun()
 	end
 end
@@ -407,22 +418,35 @@ function M:Enable()
 	events:RegisterUnitEvent("UNIT_SPELLCAST_START", "player")
 	events:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
 	events:RegisterUnitEvent("UNIT_SPELLCAST_INTERRUPTED", "player")
-	events:SetScript("OnEvent", function(_, event, _, _, spellID)
+	events:SetScript("OnEvent", function(_, event, _, castGUID, spellID)
 		if event == "TRADE_SKILL_SHOW" then
 			SetUpProfessionsFrame()
 			UpdateLabel()
 		elseif event == "UPDATE_TRADESKILL_CAST_STOPPED" then
-			C_Timer.After(0.5, CheckStopped)
+			-- Before this run's first cast started, the stop is the last run's queue
+			-- ending. If this run never starts, UpdateBar's idle check ends it.
+			if run and run.cast then
+				local stoppedRun = run
+				C_Timer.After(0.5, function() CheckStopped(stoppedRun) end)
+			end
 		elseif run and not run.finished and not run.test then
 			spellID = PublicNumber(spellID)
 			if spellID ~= run.spellID then return end
+			castGUID = Public(castGUID) and castGUID or nil
+			-- The cast that was going when this run was asked for isn't ours.
+			if castGUID and castGUID == run.oldCast then return end
 			if event == "UNIT_SPELLCAST_START" then
+				run.cast = castGUID or true
 				OnCastStart(spellID)
 			elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
+				run.cast = run.cast or castGUID or true   -- instant crafts have no START
 				run.done = run.done + 1
 				if run.done >= run.total then FinishRun() end
 			elseif event == "UNIT_SPELLCAST_INTERRUPTED" then
-				FinishRun("Interrupted")
+				-- Only an interrupt of a cast this run started counts.
+				if run.cast and (not castGUID or run.cast == true or castGUID == run.cast) then
+					FinishRun("Interrupted")
+				end
 			end
 		end
 	end)
