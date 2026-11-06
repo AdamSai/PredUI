@@ -19,6 +19,7 @@ Every part is a module you can turn on or off. Open the settings with `/predui` 
 | **Mail Ledger** | Shows how much gold you looted from the mailbox, where it came from and what is still waiting. Can open the mailbox on Send Mail, addressed to your default alt. | `/mledger` |
 | **Hidden Settings** | Game settings that aren't in the Options menu: denser grass, longer foliage distance, weather, screen effects and more. | `/hiddensettings` |
 | **Paladin Buffs** | Shows your active seal next to the Cooldown Manager's buff icons, and a Righteous Fury reminder in dungeons and raids. | `/palbuffs` |
+| **Notes** | Post-it notes for reminders. Keep a list of notes, pin one to keep it on screen, or have it open by itself when you enter a zone or any capital city. A floating button (optional) opens the list. | `/notes` |
 
 ### Bank Alt
 
@@ -43,6 +44,17 @@ Marks items in your bags and bank so you can see at a glance what to mail to you
 ### Flight Timer
 
 <img src="docs/screenshots/flight-timer.png" alt="Flight Timer bar" width="436">
+
+### Notes
+
+Post-it notes in four paper colours, with a list of all your notes and a floating button to open it.
+
+- **Pin** a note to keep it on screen, also after a reload.
+- **Areas**: a note can open by itself when you enter a zone, a subzone or any capital city.
+- New notes are only seen by the character that wrote them; untick "Only on ..." under Areas to share one with all your characters.
+- Drag a note by its title to move it.
+
+<img src="docs/screenshots/notes-list.png" alt="Notes list, notes and the floating button" width="480"> <img src="docs/screenshots/notes-areas.png" alt="A note's Areas panel" width="480">
 
 ## Works with
 

@@ -278,6 +278,7 @@ function S.ScrollBar(parent, onScroll)
 	local track = Tex(s, "BACKGROUND", 0)
 	track:SetVertexColor(1, 1, 1, 0.06)
 	track:SetAllPoints()
+	s.track = track
 	local thumb = s:CreateTexture(nil, "OVERLAY")
 	thumb:SetTexture(WHITE)
 	thumb:SetVertexColor(S.ACCENT[1], S.ACCENT[2], S.ACCENT[3], 0.7)
