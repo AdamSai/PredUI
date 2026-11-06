@@ -8,10 +8,17 @@
 --     tainting it, so this module draws its own icons in the same style and
 --     lines them up beside the manager's buff icons.
 --   * Seal: shown while any seal is on you (every rank of every seal), with its
---     time left as a swipe, like the manager's own buff icons.
---   * Righteous Fury: shown, tinted red, while you're in a dungeon or raid,
---     know the spell and don't have it on. It's a reminder, so it disappears as
---     soon as you cast it.
+--     time left as a swipe, like the manager's own buff icons. It flashes in
+--     its last seconds (4 by default). In combat with no seal on, your last
+--     seal shows faded and flashing, as a reminder to put one up.
+--   * Righteous Fury: shown, tinted red, while you're in a dungeon or raid
+--     (or in any group with a shield on), know the spell and don't have it on. It's a reminder, so it disappears as
+--     soon as you cast it. While it's on, it shows (flashing, with its time
+--     left) in its last seconds, 10 by default. That needs its duration, read
+--     from the buff out of combat; a Righteous Fury with no duration never
+--     runs out, so it never shows.
+--   * Running out or missing, the icons also get the action button proc glow
+--     (Blizzard's template, on our own frame; its alert manager isn't used).
 --   * Buffs are looked up by spell ID, with a fallback on the buff's name for
 --     any rank this list doesn't know.
 --   * In combat (and encounters, PvP) the game makes buff data secret to
@@ -40,9 +47,13 @@ local Public, PublicNumber, PublicString, Try = ns.Public, ns.PublicNumber, ns.P
 
 local M = ns.NewModule("paladin", {
 	title = "Paladin Buffs",
-	notes = "Shows your active seal next to the Cooldown Manager's buff icons, and a Righteous Fury reminder in dungeons and raids.",
+	notes = "Shows your active seal next to the Cooldown Manager's buff icons, and a Righteous Fury reminder in dungeons, raids, and groups when you have a shield on.",
 	defaults = {
 		seal = true, fury = true,
+		flashMissing = true,   -- in combat with no seal on: show the last seal, faded, flashing
+		flashExpiring = true, warnSeconds = 4,
+		furyExpiring = true, furyWarnSeconds = 10,
+		glow = true,           -- proc glow while running out or missing
 		attach = "right",      -- right / left / above / below of the manager's buff icons, or "free"
 		matchSize = true, size = 40, gap = 4,
 		locked = false, debug = false,
@@ -54,6 +65,8 @@ local DEFAULT_POINT = { "CENTER", "CENTER", 0, -120 }
 local BASE_SIZE = 40           -- CooldownViewerBuffIconItemTemplate's size
 local TEST_SECONDS = 15
 local FURY_TINT = { 1, 0.35, 0.35 }
+local FLASH_ALPHA = 0.25        -- lowest alpha of the flash
+local FLASH_SECONDS = 0.35      -- one fade, out or in
 
 -- Every rank of every seal on Forever (from the game's rank data).
 local SEALS = {
@@ -94,7 +107,7 @@ local function Log(text)
 	if #log > 15 then table.remove(log, 1) end
 	if db and db.debug then M.Say(text) end
 end
-local fury = { on = false }    -- { on, instanceID, castAt }
+local fury = { on = false }    -- { on, instanceID, castAt, duration, expires }
 
 --------------------------------------------------------------------------------
 -- Aura lookups
@@ -221,7 +234,15 @@ local function Rescan()
 		seal = nil
 	end
 	local f = FuryAura()
-	fury = { on = f ~= nil, instanceID = f and PublicNumber(f.auraInstanceID) }
+	fury = { on = f ~= nil }
+	if f then
+		local duration, expires = PublicNumber(f.duration), PublicNumber(f.expirationTime)
+		if duration then db.durations[RIGHTEOUS_FURY] = duration end
+		fury.instanceID = PublicNumber(f.auraInstanceID)
+		if duration and duration > 0 and expires and expires > 0 then
+			fury.duration, fury.expires = duration, expires
+		end
+	end
 end
 
 -- Your own casts are never secret, so they carry us through combat.
@@ -237,6 +258,12 @@ local function OnCast(spellID)
 		C_Timer.After(CATCH_WINDOW + 0.1, M.Update)
 	elseif spellID == RIGHTEOUS_FURY then
 		fury = { on = true, castAt = now }
+		-- Its duration is only known once the buff has been read (0 = none).
+		local duration = db.durations[RIGHTEOUS_FURY]
+		if duration and duration > 0 then
+			fury.duration, fury.expires = duration, now + duration
+			C_Timer.After(duration + 0.1, M.Update)
+		end
 		C_Timer.After(CATCH_WINDOW + 0.1, M.Update)
 	end
 end
@@ -263,6 +290,21 @@ end
 local function InInstance()
 	local inside, kind = IsInInstance()
 	return Public(inside) and inside and Public(kind) and INSTANCE_TYPES[kind] or false
+end
+
+local function HasShield()
+	local itemID = GetInventoryItemID and Try(GetInventoryItemID, "player", INVSLOT_OFFHAND or 17)
+	if not Public(itemID) or not itemID or not (C_Item and C_Item.GetItemInfoInstant) then return false end
+	local equipLoc = select(4, Try(C_Item.GetItemInfoInstant, itemID))
+	return Public(equipLoc) and equipLoc == "INVTYPE_SHIELD" or false
+end
+
+-- Where Righteous Fury is wanted: a dungeon or raid, or any group while
+-- you hold a shield (tanking).
+local function WantsFury()
+	if InInstance() then return true end
+	local grouped = IsInGroup and Try(IsInGroup)
+	return Public(grouped) and grouped and HasShield() or false
 end
 
 --------------------------------------------------------------------------------
@@ -292,10 +334,49 @@ local function NewIcon()
 	f.Cooldown:SetSwipeColor(0, 0, 0, 0.7)
 	f.Cooldown:SetDrawEdge(false)
 
+	-- The flash: fade out and back in, over and over.
+	f.Flash = f:CreateAnimationGroup()
+	f.Flash:SetLooping("BOUNCE")
+	local fade = f.Flash:CreateAnimation("Alpha")
+	fade:SetFromAlpha(1)
+	fade:SetToAlpha(FLASH_ALPHA)
+	fade:SetDuration(FLASH_SECONDS)
+	fade:SetSmoothing("IN_OUT")
+
+	-- The glow: Blizzard's own proc glow (as on action buttons and the
+	-- Cooldown Manager), built from its template on our frame. Blizzard's
+	-- alert manager isn't used, so its shared list of glowing buttons is
+	-- never touched by us.
+	local ok, glow = pcall(CreateFrame, "Frame", nil, f, "ActionButtonSpellAlertTemplate")
+	if ok and glow and glow.ProcStartAnim and glow.ProcLoop then
+		glow:SetPoint("CENTER")
+		glow:SetFrameLevel(f.Cooldown:GetFrameLevel() + 2)
+		glow:EnableMouse(false)
+		glow:Hide()
+		f.ProcGlow = glow
+	end
+
 	-- Click-through, no tooltip.
 	f:EnableMouse(false)
 	f:Hide()
 	return f
+end
+
+local function SetGlow(icon, on)
+	local glow = icon.ProcGlow
+	if not glow then return end
+	if on then
+		if not glow:IsShown() then
+			glow:Show()
+			glow.ProcStartAnim:Play()   -- its OnFinished starts the loop
+		elseif not glow.ProcStartAnim:IsPlaying() and not glow.ProcLoop:IsPlaying() then
+			glow.ProcLoop:Play()        -- stopped while the icon was hidden
+		end
+	elseif glow:IsShown() then
+		glow.ProcStartAnim:Stop()
+		glow.ProcLoop:Stop()
+		glow:Hide()
+	end
 end
 
 --------------------------------------------------------------------------------
@@ -377,6 +458,7 @@ local function Place()
 	local leftToRight = db.attach ~= "left"
 	for i, icon in ipairs(shown) do
 		icon:SetSize(size, size)
+		if icon.ProcGlow then icon.ProcGlow:SetSize(size * 1.4, size * 1.4) end
 		icon:ClearAllPoints()
 		local offset = (i - 1) * (size + gap)
 		if leftToRight then
@@ -417,6 +499,43 @@ end
 
 local isPaladin
 
+local function InCombat()
+	return InCombatLockdown() or UnitAffectingCombat("player") and true or false
+end
+
+-- The seal to remind you of: the last one you used, else the first you know.
+local function MissingSealID()
+	local last = M.charDB.lastSeal
+	if last and KnowsSpell(last) then return last end
+	for _, ranks in ipairs(SEALS) do
+		for i = #ranks, 1, -1 do
+			if KnowsSpell(ranks[i]) then return ranks[i] end
+		end
+	end
+end
+
+local wakeTimer, wakeAt        -- wakes Update when a flash is due
+
+-- Run Update again at time `at` (the earliest one asked for wins).
+local function WakeAt(at)
+	if wakeAt and wakeAt <= at and wakeAt > GetTime() then return end
+	if wakeTimer then wakeTimer:Cancel() end
+	wakeAt = at
+	wakeTimer = C_Timer.NewTimer(math.max(at - GetTime(), 0.05), function()
+		wakeTimer, wakeAt = nil, nil
+		M.Update()
+	end)
+end
+
+local function SetFlashing(icon, on)
+	if on and not icon.Flash:IsPlaying() then
+		icon.Flash:Play()
+	elseif not on and icon.Flash:IsPlaying() then
+		icon.Flash:Stop()
+		icon:SetAlpha(1)
+	end
+end
+
 local function Update()
 	if not holder then return end
 	local testing = testUntil and GetTime() < testUntil
@@ -436,6 +555,14 @@ local function Update()
 				Log("seal timer ran out")
 			end
 		end
+		if fury.on and fury.expires and now >= fury.expires then
+			local set = fury.instanceID and ReadIDs()
+			if set and set[fury.instanceID] then
+				fury.expires, fury.duration = nil, nil
+			else
+				fury = { on = false }
+			end
+		end
 		if UnitIsDeadOrGhost("player") and (seal or fury.on) then
 			seal, fury = nil, { on = false }
 			Log("you died")
@@ -443,6 +570,7 @@ local function Update()
 		local id = seal and seal.id
 		if id ~= lastSealID then
 			if id then
+				M.charDB.lastSeal = id
 				Log(("seal shown: %s"):format(PublicString(Try(C_Spell.GetSpellName, id)) or id))
 			elseif lastSealID then
 				Log("seal hidden")
@@ -451,29 +579,72 @@ local function Update()
 		end
 	end
 
-	-- Seal
-	local sealID
+	-- Seal: active (flashing in its last seconds), or missing in combat
+	-- (the last seal you used, faded and flashing).
+	local sealID, missing, flash
+	local now = GetTime()
 	if testing then
 		sealID = SEALS[1][1]
 		sealIcon.Cooldown:SetCooldown(testUntil - TEST_SECONDS, TEST_SECONDS)
+		flash = db.flashExpiring and testUntil - now <= db.warnSeconds
 	elseif isPaladin and db.seal and seal then
 		sealID = seal.id
 		if seal.expires and seal.duration then
 			sealIcon.Cooldown:SetCooldown(seal.expires - seal.duration, seal.duration)
+			local left = seal.expires - now
+			flash = db.flashExpiring and left <= db.warnSeconds
+			if db.flashExpiring and not flash then
+				WakeAt(seal.expires - db.warnSeconds + 0.05)
+			end
 		else
 			sealIcon.Cooldown:Clear()
 		end
+	end
+	-- No seal in combat: the last seal, faded, flashing and glowing.
+	local missingID = not testing and isPaladin and not seal and InCombat()
+		and not UnitIsDeadOrGhost("player") and MissingSealID()
+	if missingID and db.seal and db.flashMissing then
+		sealID = missingID
+		missing, flash = true, true
+		sealIcon.Cooldown:Clear()
 	end
 	if sealID and sealIcon.spellID ~= sealID then
 		sealIcon.Icon:SetTexture(SpellIcon(sealID))
 		sealIcon.spellID = sealID
 	end
+	sealIcon.Icon:SetDesaturated(missing and true or false)
+	SetFlashing(sealIcon, flash and true or false)
+	SetGlow(sealIcon, db.glow and flash and true or false)
 	sealIcon:SetShown(sealID ~= nil)
 
-	-- Righteous Fury reminder
-	local showFury = testing or (isPaladin and db.fury and InInstance() and not UnitIsDeadOrGhost("player")
-		and KnowsSpell(RIGHTEOUS_FURY) and not fury.on)
-	furyIcon:SetShown(showFury and true or false)
+	-- Righteous Fury: the red reminder while it's missing in an instance, or
+	-- the real icon, flashing, in its last seconds.
+	local furyMissing, furyFlash = false, false
+	if testing then
+		furyMissing = true
+	elseif isPaladin and db.fury then
+		if fury.on then
+			if db.furyExpiring and fury.expires and fury.duration then
+				if fury.expires - now <= db.furyWarnSeconds then
+					furyFlash = true
+				else
+					WakeAt(fury.expires - db.furyWarnSeconds + 0.05)
+				end
+			end
+		else
+			furyMissing = WantsFury() and not UnitIsDeadOrGhost("player") and KnowsSpell(RIGHTEOUS_FURY) and true or false
+		end
+	end
+	if furyFlash then
+		furyIcon.Cooldown:SetCooldown(fury.expires - fury.duration, fury.duration)
+		furyIcon.Icon:SetVertexColor(1, 1, 1)
+	else
+		furyIcon.Cooldown:Clear()
+		furyIcon.Icon:SetVertexColor(FURY_TINT[1], FURY_TINT[2], FURY_TINT[3])
+	end
+	SetFlashing(furyIcon, furyFlash)
+	SetGlow(furyIcon, db.glow and (furyMissing or furyFlash))
+	furyIcon:SetShown(furyMissing or furyFlash)
 
 	-- Always shown when there's something to show, even if the manager is
 	-- hidden or empty: then the icons use their own spot (see AnchorMode).
@@ -565,7 +736,13 @@ end
 
 M.options = {
 	{ type = "checkbox", key = "seal", label = "Active seal", tooltip = "Show your seal while it's on you, with its time left.", onChange = Update },
-	{ type = "checkbox", key = "fury", label = "Righteous Fury reminder", tooltip = "In dungeons and raids, show Righteous Fury while it's missing.", onChange = Update },
+	{ type = "checkbox", key = "flashMissing", label = "Flash when the seal is missing", tooltip = "In combat with no seal on, show your last seal faded and flashing.", onChange = Update },
+	{ type = "checkbox", key = "flashExpiring", label = "Flash before the seal runs out", tooltip = "Flash the seal in its last seconds.", onChange = Update },
+	{ type = "slider", key = "warnSeconds", label = "Flash in the last", min = 1, max = 10, step = 1, format = function(v) return ("%d s"):format(v) end, tooltip = "How many seconds before the seal runs out it starts flashing.", onChange = Update },
+	{ type = "checkbox", key = "fury", label = "Righteous Fury reminder", tooltip = "In dungeons and raids, or in a group with a shield on, show Righteous Fury while it's missing.", onChange = Update },
+	{ type = "checkbox", key = "furyExpiring", label = "Flash before Righteous Fury runs out", tooltip = "Show Righteous Fury, flashing, in its last seconds.", onChange = Update },
+	{ type = "slider", key = "furyWarnSeconds", label = "Righteous Fury: flash in the last", min = 5, max = 60, step = 5, format = function(v) return ("%d s"):format(v) end, tooltip = "How many seconds before Righteous Fury runs out it shows and flashes.", onChange = Update },
+	{ type = "checkbox", key = "glow", label = "Glow", tooltip = "Put the action button proc glow around the seal and Righteous Fury while they're running out or missing.", onChange = Update },
 	{ type = "dropdown", key = "attach", label = "Position", tooltip = "Where the icons go, relative to the Cooldown Manager's tracked buff icons.",
 		values = function() return ATTACH_NAMES end, onChange = Update },
 	{ type = "checkbox", key = "matchSize", label = "Same size as the Cooldown Manager", tooltip = "Use the Cooldown Manager's icon size. Turn off to pick your own.", onChange = Update },
@@ -648,7 +825,6 @@ function M:Enable()
 	furyIcon.spellID = RIGHTEOUS_FURY
 	furyIcon.Icon:SetTexture(SpellIcon(RIGHTEOUS_FURY))
 	furyIcon.Icon:SetVertexColor(FURY_TINT[1], FURY_TINT[2], FURY_TINT[3])
-	furyIcon.Glow = S.Glow(furyIcon, 10, 2, 1, 0.2, 0.2, 0.6)
 
 	CacheSealNames()
 	HookViewer()
@@ -662,6 +838,9 @@ function M:Enable()
 	events:RegisterEvent("PLAYER_ALIVE")
 	events:RegisterEvent("PLAYER_UNGHOST")
 	events:RegisterEvent("PLAYER_REGEN_ENABLED")
+	events:RegisterEvent("PLAYER_REGEN_DISABLED")
+	events:RegisterEvent("GROUP_ROSTER_UPDATE")
+	events:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 	events:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
 	events:SetScript("OnEvent", function(_, event, _, _, arg3)
 		if event == "SPELLS_CHANGED" or event == "PLAYER_ENTERING_WORLD" then CacheSealNames() end

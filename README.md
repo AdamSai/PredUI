@@ -18,7 +18,7 @@ Every part is a module you can turn on or off. Open the settings with `/predui` 
 | **Loot Room** | When your bags are full, shows your lowest-value items next to the loot window so you can free a slot. | `/lootroom` |
 | **Mail Ledger** | Shows how much gold you looted from the mailbox, where it came from and what is still waiting. Can open the mailbox on Send Mail, addressed to your default alt. | `/mledger` |
 | **Hidden Settings** | Game settings that aren't in the Options menu: denser grass, longer foliage distance, weather, screen effects and more. | `/hiddensettings` |
-| **Paladin Buffs** | Shows your active seal next to the Cooldown Manager's buff icons, and a Righteous Fury reminder in dungeons and raids. | `/palbuffs` |
+| **Paladin Buffs** | Shows your active seal next to the Cooldown Manager's buff icons (flashing and glowing as it runs out or when it's missing in combat), and a Righteous Fury reminder in dungeons, raids, and groups when you have a shield on. | `/palbuffs` |
 | **Notes** | Post-it notes for reminders. Keep a list of notes, pin one to keep it on screen, or have it open by itself when you enter a zone or any capital city. A floating button (optional) opens the list. | `/notes` |
 
 ### Bank Alt
