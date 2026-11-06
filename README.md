@@ -35,8 +35,9 @@ Marks items in your bags and bank so you can see at a glance what to mail to you
 - Grey (poor) items never count as valuable: their AH price is ignored everywhere in PredUI.
 - `/bankalt list` prints everything in your bags worth sending, with the total.
 - **Ignore** an item (a profession tool you will never sell, say) with Ctrl+Alt+right-click in your bags: it gets no marks at all. Do it again to undo; `/bankalt ignored` lists them.
+- The same marks show on the item icons in **Auctionator's Selling tab** at the auction house.
 
-<img src="docs/screenshots/bank-alt-bags.png" alt="Bank Alt marks in Baganator: padlocks on soulbound items, scrolls on quest items" width="420"> <img src="docs/screenshots/ah-vs-vendor.png" alt="AH vs vendor line in the item tooltip" width="274">
+<img src="docs/screenshots/bank-alt-bags.png" alt="Bank Alt marks in Baganator: padlocks on soulbound items, scrolls on quest items" width="420"> <img src="docs/screenshots/ah-vs-vendor.png" alt="AH vs vendor line in the item tooltip" width="274"> <img src="docs/screenshots/bank-alt-auctionator.png" alt="Bank Alt marks in Auctionator's Selling tab" width="274">
 
 <img src="docs/screenshots/settings-bankalt.png" alt="Bank Alt settings" width="640">
 
@@ -87,7 +88,7 @@ Post-it notes in four paper colours, with a list of all your notes and a floatin
 All optional; PredUI runs without them.
 
 - [Baganator](https://www.curseforge.com/wow/addons/baganator): Bank Alt hooks Baganator's bag, bank and other-character views. Its coin/trash, padlock and quest scroll are Baganator corner icons you can move in Baganator's icon settings.
-- [Auctionator](https://www.curseforge.com/wow/addons/auctionator): auction prices for Bank Alt, the tooltip line and Loot Room's AH sorting.
+- [Auctionator](https://www.curseforge.com/wow/addons/auctionator): auction prices for Bank Alt, the tooltip line and Loot Room's AH sorting. Bank Alt also marks the items in its Selling tab.
 
 ## Install
 

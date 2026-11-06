@@ -9,6 +9,8 @@
 --     vendor price count as valuable; items with no AH price never do, and
 --     grey items never have one (ns.AuctionPrice skips them). The
 --     coin is coloured by how far above vendor it is (see TIERS).
+--   * Auctionator's Selling tab at the AH gets the same marks on its item
+--     icons (hook on AuctionatorGroupsViewItemMixin.SetItemInfo).
 --   * Ctrl+Alt+right-click an item in your bags to ignore it (no marks at all,
 --     left out of /bankalt list); db.ignored holds the item IDs.
 --   * Soulbound items get a small padlock (same corner as the coin, since an
@@ -652,6 +654,60 @@ local function SetupBaganator()
 end
 
 --------------------------------------------------------------------------------
+-- Auctionator Selling tab
+--------------------------------------------------------------------------------
+
+-- The Selling tab's bag list (and its big selected-item icon) are
+-- AuctionatorGroupsViewItemTemplate buttons, filled by SetItemInfo(info):
+-- info.itemLink, info.itemCount (all stacks together), info.locations
+-- (ItemLocations), or nil for an empty button. The buttons come from a pool
+-- made when the AH first opens, after this hook, so hooking the mixin covers
+-- them all (Mixin copies the hooked method onto each new button).
+local auctionatorButtons = setmetatable({}, { __mode = "k" })   -- [button] = its last info
+
+local function UpdateAuctionatorButton(button, info)
+	auctionatorButtons[button] = info or false
+	local link = type(info) == "table" and ns.PublicString(info.itemLink)
+	if not link or IsIgnored(link) then
+		ClearButton(button)
+		return
+	end
+	local loc = type(info.locations) == "table" and info.locations[1]
+	local bound, bag, slot
+	if loc then
+		bound = ns.Try(C_Item.IsBound, loc) and true or false
+		bag, slot = ns.Try(loc.GetBagAndSlot, loc)
+	end
+	local boe, valuable, _, percent = Classify(link, bound, info.itemCount)
+	if boe == nil then
+		ClearButton(button)
+		Item:CreateFromItemLink(link):ContinueOnItemLoad(function()
+			if auctionatorButtons[button] == info then UpdateAuctionatorButton(button, info) end
+		end)
+		return
+	end
+	Draw(button, boe, valuable, true, percent, bound, IsQuestNeeded(link, bag, slot))
+end
+
+local function SetupAuctionatorSelling()
+	local mixin = AuctionatorGroupsViewItemMixin
+	if type(mixin) ~= "table" or type(mixin.SetItemInfo) ~= "function" then return end
+	hooksecurefunc(mixin, "SetItemInfo", function(self, info)
+		if M.enabled then UpdateAuctionatorButton(self, info) end
+	end)
+end
+
+local function RefreshAuctionator()
+	for button, info in pairs(auctionatorButtons) do
+		if info and button:IsShown() then
+			UpdateAuctionatorButton(button, info)
+		elseif not info then
+			ClearButton(button)
+		end
+	end
+end
+
+--------------------------------------------------------------------------------
 -- Tooltip: "AH vs vendor +X%" right under Auctionator's own price lines
 --------------------------------------------------------------------------------
 
@@ -703,6 +759,7 @@ end
 local function RefreshAll()
 	RefreshDefault()
 	RefreshBaganator()
+	RefreshAuctionator()
 end
 
 local function Debounced(fn)
@@ -935,6 +992,7 @@ function M:Enable()
 	end
 
 	SetupBaganator()
+	SetupAuctionatorSelling()
 	SetupTooltip()
 	ScanQuestLog()
 
