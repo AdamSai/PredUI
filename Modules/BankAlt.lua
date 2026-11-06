@@ -8,6 +8,8 @@
 --     for copper herbs and gold-priced gear. Items with an AH price but no
 --     vendor price count as valuable; items with no AH price never do. The
 --     coin is coloured by how far above vendor it is (see TIERS).
+--   * Ctrl+Alt+right-click an item in your bags to ignore it (no marks at all,
+--     left out of /bankalt list); db.ignored holds the item IDs.
 --   * Soulbound items get a small padlock (same corner as the coin, since an
 --     item is never both).
 --   * Item tooltips get an "AH vs vendor" line under Auctionator's prices.
@@ -131,11 +133,7 @@ local baganatorButtons = setmetatable({}, { __mode = "k" })   -- [button] = its 
 --------------------------------------------------------------------------------
 
 -- Auctionator's price for one item, or nil (no Auctionator, no data).
-local function AuctionPrice(link)
-	local api = Auctionator and Auctionator.API and Auctionator.API.v1
-	if not (api and api.GetAuctionPriceByItemLink) then return end
-	return ns.PublicNumber(ns.Try(api.GetAuctionPriceByItemLink, CALLER_ID, link))
-end
+local AuctionPrice = ns.AuctionPrice
 
 -- Returns isBoE, isValuable, stackValue (copper, AH price x count) and the AH
 -- price's % over the vendor price (nil when there's no vendor price).
@@ -405,12 +403,68 @@ local function Draw(button, boe, valuable, drawIcons, percent, bound, quest)
 end
 
 --------------------------------------------------------------------------------
+-- Ignored items: no marks at all (a profession tool you'll never sell...)
+--------------------------------------------------------------------------------
+
+-- db.ignored = { [itemID] = true }, account-wide. Per item, not per slot.
+local IGNORE_HINT = "Ctrl+Alt+right-click"
+local OnIgnoreChanged          -- set further down, once the refresh exists
+
+local function ItemID(link)
+	return link and ns.PublicNumber((C_Item.GetItemInfoInstant(link)))
+end
+
+local function IsIgnored(link)
+	local id = ItemID(link)
+	return id ~= nil and db.ignored[id] == true
+end
+
+local function ToggleIgnore(link)
+	local id = ItemID(link)
+	if not id then return end
+	if db.ignored[id] then
+		db.ignored[id] = nil
+		M.Say(link .. " is no longer ignored.")
+	else
+		db.ignored[id] = true
+		M.Say("ignoring " .. link .. ". " .. IGNORE_HINT .. " it again to undo.")
+	end
+	if OnIgnoreChanged then OnIgnoreChanged() end
+end
+
+-- Ctrl+Alt+right-click toggles ignore. A modified click never uses or equips
+-- the item (ContainerFrameItemButtonMixin:OnClick sends it to
+-- OnModifiedClick), and dressing room is Ctrl+left only.
+local function IsIgnoreClick(mouseButton)
+	return mouseButton == "RightButton" and IsControlKeyDown() and IsAltKeyDown() and not IsShiftKeyDown()
+end
+
+-- getLink(button) returns the item link behind the button, or nil.
+local function HookIgnoreClick(button, getLink)
+	if button.PredUIBankAltClick then return end
+	button.PredUIBankAltClick = true
+	button:HookScript("OnClick", function(self, mouseButton)
+		if M.enabled and IsIgnoreClick(mouseButton) then
+			local link = getLink(self)
+			if link then ToggleIgnore(link) end
+		end
+	end)
+end
+
+--------------------------------------------------------------------------------
 -- Default bags and bank
 --------------------------------------------------------------------------------
 
+local function SlotLink(button)
+	local bag, slot = button.PredUIBankAltBag, button.PredUIBankAltSlot
+	return bag and slot and ns.PublicString(C_Container.GetContainerItemLink(bag, slot))
+end
+
 local function UpdateSlotButton(button, bag, slot)
+	button.PredUIBankAltBag, button.PredUIBankAltSlot = bag, slot
+	HookIgnoreClick(button, SlotLink)
 	local info = C_Container.GetContainerItemInfo(bag, slot)
-	if not (info and info.hyperlink) then
+	if not (info and info.hyperlink) or IsIgnored(info.hyperlink) then
 		ClearButton(button)
 		return
 	end
@@ -468,7 +522,7 @@ end
 local function UpdateBaganatorButton(button, details)
 	baganatorButtons[button] = details or false
 	local link = details and details.itemLink
-	if not link then
+	if not link or IsIgnored(link) then
 		ClearButton(button)
 		return
 	end
@@ -491,6 +545,10 @@ local function HookBaganatorButton(button)
 	button.PredUIBankAltHooked = true
 	hooksecurefunc(button, "SetItemDetails", function(self, details)
 		if M.enabled then UpdateBaganatorButton(self, details) end
+	end)
+	HookIgnoreClick(button, function(self)
+		local details = baganatorButtons[self]
+		return details and ns.PublicString(details.itemLink)
 	end)
 end
 
@@ -522,7 +580,7 @@ local function SetupBaganator()
 		-- One widget for the coin and the trash can: they never show together.
 		ns.Try(api.RegisterCornerWidget, "PredUI: value (coin / trash)", "predui_valuable",
 			function(frame, details)
-				if not M.enabled or not details.itemLink then return false end
+				if not M.enabled or not details.itemLink or IsIgnored(details.itemLink) then return false end
 				local boe, valuable, _, percent = Classify(details.itemLink, details.isBound, details.itemCount, details.hasNoValue)
 				if boe == nil then return nil end        -- Baganator retries later
 				local _, coin, _, trash = Look(boe, valuable, percent)
@@ -552,6 +610,7 @@ local function SetupBaganator()
 		ns.Try(api.RegisterCornerWidget, "PredUI: soulbound", "predui_soulbound",
 			function(_, details)
 				return M.enabled and db.lockBound and not testMode and details.itemLink ~= nil and details.isBound == true
+					and not IsIgnored(details.itemLink)
 			end,
 			function(itemButton)
 				local frame = CreateFrame("Frame", nil, itemButton)
@@ -566,7 +625,7 @@ local function SetupBaganator()
 		-- Scroll on items your current quests need. First in the top right corner.
 		ns.Try(api.RegisterCornerWidget, "PredUI: quest item", "predui_quest",
 			function(_, details)
-				if not (M.enabled and details.itemLink) then return false end
+				if not (M.enabled and details.itemLink) or IsIgnored(details.itemLink) then return false end
 				if not C_Item.GetItemInfo(details.itemLink) then return nil end   -- retried later
 				local loc = details.itemLocation
 				return IsQuestNeeded(details.itemLink, loc and loc.bagID, loc and loc.slotIndex)
@@ -603,6 +662,10 @@ local function SetupTooltip()
 	if not (tip and type(tip.ShowTipWithPricingDBKey) == "function") then return end
 	hooksecurefunc(tip, "ShowTipWithPricingDBKey", function(tooltip, _, link)
 		if not (M.enabled and db.tooltipPercent and tooltip and tooltip.AddDoubleLine and ns.PublicString(link)) then return end
+		if IsIgnored(link) then
+			tooltip:AddLine("Bank Alt: ignored (" .. IGNORE_HINT .. ")", 0.6, 0.6, 0.6)
+			return
+		end
 		local ah = AuctionPrice(link)
 		local sell = ns.PublicNumber(select(11, C_Item.GetItemInfo(link)))
 		if not (ah and ah > 0 and ah >= MinPrice() and sell and sell > 0) then return end
@@ -655,6 +718,7 @@ end
 
 local QueueRefresh = Debounced(RefreshDefault)
 local QueueRefreshAll = Debounced(RefreshAll)
+OnIgnoreChanged = QueueRefreshAll
 
 --------------------------------------------------------------------------------
 -- Commands
@@ -670,7 +734,7 @@ local function ListItems()
 	for bag = 0, NUM_BAG_SLOTS do
 		for slot = 1, C_Container.GetContainerNumSlots(bag) do
 			local info = C_Container.GetContainerItemInfo(bag, slot)
-			if info and info.hyperlink then
+			if info and info.hyperlink and not IsIgnored(info.hyperlink) then
 				local boe, valuable, value, percent = Classify(info.hyperlink, info.isBound, info.stackCount, info.hasNoValue)
 				if boe == nil then
 					waiting = waiting + 1
@@ -701,10 +765,35 @@ local function ListItems()
 	end
 end
 
+local function ListIgnored()
+	local ids = {}
+	for id in pairs(db.ignored) do ids[#ids + 1] = id end
+	if #ids == 0 then
+		M.Say("no ignored items. " .. IGNORE_HINT .. " an item in your bags to ignore it.")
+		return
+	end
+	table.sort(ids)
+	M.Say(#ids .. " ignored (" .. IGNORE_HINT .. " one in your bags to undo, or /bankalt unignore all):")
+	for _, id in ipairs(ids) do
+		local link = select(2, C_Item.GetItemInfo(id))
+		print("  " .. (ns.PublicString(link) or ("item " .. id)))
+	end
+end
+
 local function OnSlash(msg)
 	local cmd, arg = msg:lower():match("^%s*(%S*)%s*(.-)%s*$")
 	if cmd == "list" then
 		ListItems()
+	elseif cmd == "ignored" then
+		ListIgnored()
+	elseif cmd == "unignore" then
+		if arg == "all" then
+			wipe(db.ignored)
+			RefreshAll()
+			M.Say("no items are ignored any more.")
+		else
+			M.Say("usage: /bankalt unignore all  (or " .. IGNORE_HINT .. " a single item in your bags)")
+		end
 	elseif cmd == "percent" then
 		local n = tonumber((arg:gsub("%%", "")))
 		if n and n >= 0 then
@@ -747,6 +836,8 @@ local function OnSlash(msg)
 		M.Say("Commands:")
 		print("  /bankalt - options")
 		print("  /bankalt list - list what in your bags is worth sending")
+		print("  " .. IGNORE_HINT .. " an item in your bags - ignore it (no marks), again to undo")
+		print("  /bankalt ignored - list ignored items; /bankalt unignore all - clear them")
 		print("  /bankalt percent N - valuable when the AH price is N% above vendor")
 		print("  /bankalt trash N - trash can when the AH price is under N% above vendor")
 		print("  /bankalt minprice 10c - ignore items cheaper than this on the AH")
@@ -812,6 +903,7 @@ M.options = {
 	{ type = "checkbox", key = "lockBound", label = "Padlock on soulbound items", tooltip = "A small padlock on soulbound items, so you can see what can't go to an alt. In Baganator it's the \"PredUI: soulbound\" corner icon.", onChange = Changed },
 	{ type = "checkbox", key = "tooltipPercent", label = "AH vs vendor in tooltips", tooltip = "Adds how much more (or less) the AH price is than the vendor price, under Auctionator's price lines.", },
 	{ type = "button", label = "Items to send", button = "List", tooltip = "Lists what in your bags is worth sending to your bank alt. Also /bankalt list.", func = ListItems },
+	{ type = "button", label = "Ignored items", button = "List", tooltip = IGNORE_HINT .. " an item in your bags to ignore it: no marks on it at all. Do it again to undo. This lists them; /bankalt unignore all clears the list.", func = ListIgnored },
 }
 
 --------------------------------------------------------------------------------
@@ -820,6 +912,7 @@ M.options = {
 
 function M:Enable()
 	db = self.db
+	if type(db.ignored) ~= "table" then db.ignored = {} end
 
 	ForEachContainerFrame(function(frame)
 		frame:HookScript("OnShow", QueueRefresh)

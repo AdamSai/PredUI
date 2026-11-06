@@ -48,6 +48,19 @@ function ns.Try(fn, ...)
 	if ok then return a, b, c, d, e, f, g, h, i end
 end
 
+-- Auctionator's price for one of an item, or nil (no Auctionator, no data).
+-- Auctionator is an optional dependency, so it may be missing.
+function ns.AuctionPrice(link)
+	local api = Auctionator and Auctionator.API and Auctionator.API.v1
+	if not (api and api.GetAuctionPriceByItemLink and ns.PublicString(link)) then return end
+	return ns.PublicNumber(ns.Try(api.GetAuctionPriceByItemLink, "PredUI", link))
+end
+
+function ns.HasAuctionator()
+	local api = Auctionator and Auctionator.API and Auctionator.API.v1
+	return api ~= nil and api.GetAuctionPriceByItemLink ~= nil
+end
+
 -- "1:05", or "1:02:05" from an hour up.
 function ns.Clock(secs)
 	secs = math.max(0, math.floor(secs + 0.5))
