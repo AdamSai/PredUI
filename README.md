@@ -4,6 +4,8 @@ A collection of small quality-of-life addons for **World of Warcraft: Forever** 
 
 Every part is a module you can turn on or off. Open the settings with `/predui` (or Esc → Options → AddOns → PredUI), or left-click the PredUI minimap button.
 
+<img src="docs/screenshots/settings-predui.png" alt="PredUI settings: modules and look" width="640">
+
 ## Modules
 
 | Module | What it does | Command |
@@ -29,6 +31,18 @@ Marks items in your bags and bank so you can see at a glance what to mail to you
 - An **"AH vs vendor"** line in item tooltips, under Auctionator's prices.
 - Items cheaper than a minimum auction house price (10c by default) are left alone.
 - `/bankalt list` prints everything in your bags worth sending, with the total.
+
+<img src="docs/screenshots/bank-alt-bags.png" alt="Bank Alt marks in Baganator: padlocks, quest marks, trash cans" width="420"> <img src="docs/screenshots/ah-vs-vendor.png" alt="AH vs vendor line in the item tooltip" width="274">
+
+<img src="docs/screenshots/settings-bankalt.png" alt="Bank Alt settings" width="640">
+
+### Mail Ledger
+
+<img src="docs/screenshots/mail-ledger.png" alt="Mail Ledger panel next to the inbox" width="480"> <img src="docs/screenshots/mail-send.png" alt="Mail Ledger with Send Mail addressed to the default alt" width="480">
+
+### Flight Timer
+
+<img src="docs/screenshots/flight-timer.png" alt="Flight Timer bar" width="436">
 
 ## Works with
 
