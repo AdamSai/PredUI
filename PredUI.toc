@@ -1,0 +1,26 @@
+## Interface: 16001
+## Title: PredUI
+## Notes: Our addons in one: Flight Timer, Craft Timer, Bag Value, Icon Search, Loot Room, Mail Ledger, Paladin Buffs and Bank Alt, with one settings menu. Type /predui.
+## Author: Pred
+## Version: 1.6.2
+## IconTexture: Interface\AddOns\PredUI\Media\Icon
+## SavedVariables: PredUIDB
+## SavedVariablesPerCharacter: PredUICharDB
+## OptionalDeps: Auctionator, Baganator, Syndicator
+
+Core.lua
+Style.lua
+Modules\FlightTimer.lua
+Modules\CraftTimer.lua
+Modules\BagValue.lua
+Modules\IconSearch.lua
+Modules\LootRoom.lua
+Modules\MailLedger.lua
+Modules\MailLedgerUI.lua
+Modules\MailSubject.lua
+Modules\MailSend.lua
+Modules\HiddenSettings.lua
+Modules\PaladinBuffs.lua
+Modules\BankAlt.lua
+Settings.lua
+Minimap.lua
