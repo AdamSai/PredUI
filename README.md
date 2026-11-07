@@ -69,6 +69,8 @@ When you loot with full bags, a window next to the loot window lists your lowest
 
 ### Flight Timer
 
+Hover a destination at a flight master to see its flight time in the tooltip: the learned time once you've flown the route, or a `~` estimate until then (turn it off in the settings).
+
 <img src="docs/screenshots/flight-timer.png" alt="Flight Timer bar" width="436">
 
 ### Notes
@@ -80,8 +82,6 @@ Post-it notes in four paper colours, with a list of all your notes and a floatin
 - **Areas**: a note can open by itself when you enter a zone, a subzone or any capital city.
 - New notes are only seen by the character that wrote them; untick "Only on ..." under Areas to share one with all your characters.
 - Drag a note by its title to move it.
-Hover a destination at a flight master to see its flight time in the tooltip: the learned time once you've flown the route, or a `~` estimate until then (turn it off in the settings).
-
 
 <img src="docs/screenshots/notes-list.png" alt="Notes list, notes and the floating button" width="480"> <img src="docs/screenshots/notes-areas.png" alt="A note's Areas panel" width="480">
 
