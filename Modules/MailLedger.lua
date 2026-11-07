@@ -35,6 +35,7 @@ L.DEFAULT_SETTINGS = {
 	autoSubject = true,  -- fill the subject of money-only mail
 	openSend = false,    -- open the mailbox on the Send Mail tab
 	sendList = true,     -- show the "Worth sending" list with the mailbox
+	closeWithMail = true, -- hide the ledger and the list when the mailbox closes
 	listSort = "value",  -- sort that list by "value" (stack gold) or "percent" (over vendor)
 	-- sendTo = { [realm] = "Alt" }: the default recipient, set per realm
 }
@@ -613,8 +614,10 @@ function handlers.MAIL_INBOX_UPDATE()
 end
 
 function handlers.MAIL_CLOSED()
-	L.OnMailClosed()
-	L.OnMailClosedList()
+	if L.Setting("closeWithMail") then
+		L.OnMailClosed()
+		L.OnMailClosedList()
+	end
 	if not L.visit or L.visitSummarised == L.visit then return end
 	L.visitSummarised = L.visit
 	if L.Setting("chatSummary") then
@@ -757,6 +760,7 @@ end
 
 L.options = {
 	SettingOption("checkbox", "autoShow", "Open with the mailbox", "Show the panel whenever you open a mailbox."),
+	SettingOption("checkbox", "closeWithMail", "Close with the mailbox", "Close the Mail Ledger panel and the worth-sending list when you close the mailbox. Off: they stay open until you close them."),
 	SettingOption("checkbox", "chatSummary", "Chat summary", "Print what you looted when you leave the mailbox."),
 	SettingOption("checkbox", "autoSubject", "Fill money-only subjects", "When a mail only carries gold, put the amount in the subject."),
 	SettingOption("checkbox", "openSend", "Open on Send Mail", "Open the mailbox on the Send Mail tab instead of the Inbox. Not on the default recipient itself, which is the one collecting."),
