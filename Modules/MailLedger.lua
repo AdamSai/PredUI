@@ -592,6 +592,22 @@ end
 
 local handlers = {}
 
+local function ClosePanels()
+	if L.Setting("closeWithMail") then
+		L.OnMailClosed()
+		L.OnMailClosedList()
+	end
+end
+
+-- MAIL_CLOSED doesn't fire on Forever when you close the mailbox yourself
+-- (X, Esc, Cancel), so the panels also close when Blizzard's MailFrame hides.
+local mailFrameHooked = false
+local function HookMailFrame()
+	if mailFrameHooked or not MailFrame then return end
+	mailFrameHooked = true
+	MailFrame:HookScript("OnHide", ClosePanels)
+end
+
 function handlers.PLAYER_LOGIN()
 	InitCharacter()
 	lastMoney = GetMoney()
@@ -600,6 +616,7 @@ function handlers.PLAYER_LOGIN()
 end
 
 function handlers.MAIL_SHOW()
+	HookMailFrame()
 	StartVisit()
 	if CheckInbox then CheckInbox() end
 	L.OnMailShow()
@@ -614,10 +631,7 @@ function handlers.MAIL_INBOX_UPDATE()
 end
 
 function handlers.MAIL_CLOSED()
-	if L.Setting("closeWithMail") then
-		L.OnMailClosed()
-		L.OnMailClosedList()
-	end
+	ClosePanels()
 	if not L.visit or L.visitSummarised == L.visit then return end
 	L.visitSummarised = L.visit
 	if L.Setting("chatSummary") then
@@ -668,6 +682,7 @@ function L:Enable()
 	HookIfPresent("TakeInboxItem", OnTakeItem)
 	HookIfPresent("AutoLootMailItem", OnAutoLoot)
 	HookIfPresent("SendMail", OnSendMail)
+	HookMailFrame()
 
 	local eventFrame = CreateFrame("Frame")
 	for event in pairs(handlers) do eventFrame:RegisterEvent(event) end
