@@ -413,6 +413,14 @@ end
 local IGNORE_HINT = "Ctrl+Alt+right-click"
 local OnIgnoreChanged          -- set further down, once the refresh exists
 
+-- Other modules (Mail Ledger's "Worth sending" list) add a function here to
+-- hear when the ignore list changes, from bags or anywhere else.
+M.ignoreListeners = {}
+
+local function NotifyIgnoreListeners()
+	for _, listener in ipairs(M.ignoreListeners) do listener() end
+end
+
 local function ItemID(link)
 	return link and ns.PublicNumber((C_Item.GetItemInfoInstant(link)))
 end
@@ -433,7 +441,10 @@ local function ToggleIgnore(link)
 		M.Say("ignoring " .. link .. ". " .. IGNORE_HINT .. " it again to undo.")
 	end
 	if OnIgnoreChanged then OnIgnoreChanged() end
+	NotifyIgnoreListeners()
 end
+
+M.ToggleIgnore = ToggleIgnore
 
 -- Ctrl+Alt+right-click toggles ignore. A modified click never uses or equips
 -- the item (ContainerFrameItemButtonMixin:OnClick sends it to
@@ -441,6 +452,9 @@ end
 local function IsIgnoreClick(mouseButton)
 	return mouseButton == "RightButton" and IsControlKeyDown() and IsAltKeyDown() and not IsShiftKeyDown()
 end
+
+M.IsIgnoreClick = IsIgnoreClick
+M.IGNORE_HINT = IGNORE_HINT
 
 -- getLink(button) returns the item link behind the button, or nil.
 local function HookIgnoreClick(button, getLink)
@@ -858,6 +872,7 @@ local function OnSlash(msg)
 		if arg == "all" then
 			wipe(db.ignored)
 			RefreshAll()
+			NotifyIgnoreListeners()
 			M.Say("no items are ignored any more.")
 		else
 			M.Say("usage: /bankalt unignore all  (or " .. IGNORE_HINT .. " a single item in your bags)")

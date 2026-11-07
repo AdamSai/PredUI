@@ -59,7 +59,9 @@ When you loot with full bags, a window next to the loot window lists your lowest
 <img src="docs/screenshots/mail-ledger.png" alt="Mail Ledger panel next to the inbox" width="480"> <img src="docs/screenshots/mail-send.png" alt="Mail Ledger with Send Mail addressed to the default alt" width="480">
 
 **Worth sending** opens with the mailbox and lists the items in your bags worth sending to your bank alt, most valuable stack first (Auctionator price x count), with how far each AH price is above or below the vendor price.
+- Sorted by the stack's gold value by default, or by % over vendor (setting "Sort worth-sending by", or `/mledger sort`).
 - Click an item to attach it to the mail; **Attach top N** fills the mail's free slots.
+- Ctrl+Alt+right-click an item to never suggest it (the same ignore list as Bank Alt, so ignoring it in your bags removes it from the list straight away).
 - It follows Bank Alt's rules: no soulbound, ignored or quest items, nothing under its Min AH price. Items with no AH price aren't listed.
 - Not shown on the bank alt itself. `/mledger list` shows or hides it.
 

@@ -35,6 +35,7 @@ L.DEFAULT_SETTINGS = {
 	autoSubject = true,  -- fill the subject of money-only mail
 	openSend = false,    -- open the mailbox on the Send Mail tab
 	sendList = true,     -- show the "Worth sending" list with the mailbox
+	listSort = "value",  -- sort that list by "value" (stack gold) or "percent" (over vendor)
 	-- sendTo = { [realm] = "Alt" }: the default recipient, set per realm
 }
 
@@ -706,6 +707,10 @@ local function OnSlash(input)
 		ns.ToggleMinimapButton()
 	elseif command == "list" then
 		L.ToggleSendList()
+	elseif command == "sort" then
+		L.db.settings.listSort = L.Setting("listSort") == "percent" and "value" or "percent"
+		L.Print("worth-sending list sorted by " .. (L.Setting("listSort") == "percent" and "% over vendor" or "gold value") .. ".")
+		L.RefreshSendList()
 	elseif command == "send" then
 		ToggleSetting("openSend", "open on Send Mail")
 	elseif command == "sendto" then
@@ -725,6 +730,7 @@ local function OnSlash(input)
 		print("  /mledger chat: toggle the summary when you leave the mailbox")
 		print("  /mledger auto: toggle opening the panel with the mailbox")
 		print("  /mledger list: show or hide the worth-sending list")
+		print("  /mledger sort: sort that list by gold value or by % over vendor")
 		print("  /mledger send: toggle opening the mailbox on Send Mail")
 		print("  /mledger sendto <name>: default recipient on this realm (no name clears it)")
 		print("  /mledger minimap: show or hide the PredUI minimap button")
@@ -755,6 +761,10 @@ L.options = {
 	SettingOption("checkbox", "autoSubject", "Fill money-only subjects", "When a mail only carries gold, put the amount in the subject."),
 	SettingOption("checkbox", "openSend", "Open on Send Mail", "Open the mailbox on the Send Mail tab instead of the Inbox. Not on the default recipient itself, which is the one collecting."),
 	SettingOption("checkbox", "sendList", "Worth-sending list", "Left of the mailbox: items in your bags worth sending to your bank alt, by AH value (Auctionator), most valuable first. Click one to attach it."),
+	SettingOption("dropdown", "listSort", "Sort worth-sending by", "Gold value: the whole stack's AH value, so a valuable stack beats a valuable single item. % over vendor: how far the AH price is above the vendor price; items that can't be vendored go first.", {
+		values = function() return { { "value", "Gold value" }, { "percent", "% over vendor" } } end,
+		onChange = function() L.RefreshSendList() end,
+	}),
 	SettingOption("dropdown", "sendTo", "Default recipient", "Filled in as the recipient whenever Send Mail is empty, and again after each send. Set per realm; /mledger sendto <name> takes any name.", {
 		default = "",
 		get = function() return L.SendTargetSetting() or "" end,

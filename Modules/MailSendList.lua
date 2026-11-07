@@ -10,11 +10,17 @@
 --   * When Bank Alt is on, its rules decide what counts (not soulbound, not
 --     ignored, not needed for a quest, above its Min AH price), so the two
 --     always agree. When it's off: any unbound item with an AH price.
+--   * Sorted by stack value (a valuable stack beats a valuable single item),
+--     or, with the "Sort by" setting, by % over vendor. Items that can't be
+--     vendored (no % to compare) go first then, by value.
 --   * Click an item to attach it to the mail (switches to Send Mail first).
 --     "Attach top N" fills the free attachment slots. Attaching is pick up +
 --     ClickSendMailItemButton(), the same call as dropping an item on the
 --     mail. Attached items are locked in your bags, so they drop off the list.
 --   * Not opened on the bank alt itself (the default recipient).
+--   * Ctrl+Alt+right-click an item to never suggest it: the same ignore list
+--     as Bank Alt (db.ignored, per item ID). Ignoring in your bags updates the
+--     list straight away, through Bank Alt's ignoreListeners.
 
 local _, ns = ...
 local L = ns.byKey.mail
@@ -66,6 +72,31 @@ local function PercentText(percent)
 	end
 end
 
+local IGNORE_HINT = "Ctrl+Alt+right-click"
+
+local function ItemID(link)
+	return ns.PublicNumber((C_Item.GetItemInfoInstant(link)))
+end
+
+-- Bank Alt's ignore list, also read when that module is off (its saved table
+-- is there either way).
+local function IgnoredTable()
+	local bankAlt = ns.byKey.bankalt
+	local db = bankAlt and bankAlt.db
+	if not db then return nil end
+	if type(db.ignored) ~= "table" then db.ignored = {} end
+	return db.ignored
+end
+
+local function IsIgnored(link)
+	local ignored, id = IgnoredTable(), ItemID(link)
+	return ignored ~= nil and id ~= nil and ignored[id] == true
+end
+
+local function IsIgnoreClick(mouseButton)
+	return mouseButton == "RightButton" and IsControlKeyDown() and IsAltKeyDown() and not IsShiftKeyDown()
+end
+
 -- Stack value and % over vendor, or nil when the item isn't listed.
 local function Candidate(info, bag, slot)
 	local bankAlt = ns.byKey.bankalt
@@ -75,7 +106,7 @@ local function Candidate(info, bag, slot)
 		if not value then return nil end
 		return value, percent or VendorPercent(info, value)
 	end
-	if info.isBound then return nil end
+	if info.isBound or IsIgnored(info.hyperlink) then return nil end
 	local price = ns.AuctionPrice(info.hyperlink)
 	if not price or price <= 0 then return nil end
 	value = price * (info.stackCount or 1)
@@ -99,7 +130,13 @@ local function Scan()
 			end
 		end
 	end
+	local byPercent = L.Setting("listSort") == "percent"
 	table.sort(items, function(a, b)
+		if byPercent and a.percent ~= b.percent then
+			if not a.percent then return true end
+			if not b.percent then return false end
+			return a.percent > b.percent
+		end
 		if a.value ~= b.value then return a.value > b.value end
 		if a.bag ~= b.bag then return a.bag < b.bag end
 		return a.slot < b.slot
@@ -228,12 +265,32 @@ local function QueueRefresh()
 	end)
 end
 
+-- Uses Bank Alt's own toggle when it's on, so its bag marks update too.
+local function ToggleIgnore(link)
+	local bankAlt = ns.byKey.bankalt
+	if bankAlt and bankAlt.enabled and bankAlt.ToggleIgnore then
+		bankAlt.ToggleIgnore(link)   -- its listeners refresh this list
+		return
+	end
+	local ignored, id = IgnoredTable(), ItemID(link)
+	if not (ignored and id) then return end
+	if ignored[id] then
+		ignored[id] = nil
+		L.Print(link .. " will be suggested again.")
+	else
+		ignored[id] = true
+		L.Print("won't suggest " .. link .. " any more. " .. IGNORE_HINT .. " it in this list again to undo.")
+	end
+	L.RefreshSendList()
+end
+
 local function ShowRowTooltip(row)
 	local item = row.item
 	if not item then return end
 	GameTooltip:SetOwner(row, "ANCHOR_LEFT")
 	GameTooltip:SetBagItem(item.bag, item.slot)
 	GameTooltip:AddLine("Click to attach to the mail.", 0.5, 0.5, 0.5)
+	GameTooltip:AddLine(IGNORE_HINT .. " to never suggest it.", 0.5, 0.5, 0.5)
 	GameTooltip:Show()
 end
 
@@ -243,7 +300,7 @@ local function BuildRow(index)
 	row:SetPoint("TOPLEFT", PAD, LIST_TOP - (index - 1) * ROW_H)
 	row:SetPoint("TOPRIGHT", -PAD - 12, LIST_TOP - (index - 1) * ROW_H)
 	S.RowHighlight(row)
-	row:RegisterForClicks("LeftButtonUp")
+	row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 
 	row.icon = row:CreateTexture(nil, "ARTWORK")
 	row.icon:SetSize(ICON, ICON)
@@ -265,7 +322,14 @@ local function BuildRow(index)
 	row.name:SetPoint("RIGHT", row.percent, "LEFT", -6, 0)
 	row.name:SetJustifyH("LEFT")
 
-	row:SetScript("OnClick", function(self) if self.item then AttachItem(self.item) end end)
+	row:SetScript("OnClick", function(self, mouseButton)
+		if not self.item then return end
+		if IsIgnoreClick(mouseButton) then
+			ToggleIgnore(self.item.link)
+		elseif mouseButton == "LeftButton" then
+			AttachItem(self.item)
+		end
+	end)
 	row:SetScript("OnEnter", ShowRowTooltip)
 	row:SetScript("OnLeave", function() GameTooltip:Hide() end)
 	return row
@@ -326,7 +390,7 @@ local function Build()
 	local hint = S.Text(panel, 10)
 	hint:SetPoint("TOPLEFT", PAD, footerY - 34)
 	hint:SetTextColor(0.5, 0.5, 0.5)
-	hint:SetText("Click an item to attach it. AH prices from Auctionator.")
+	hint:SetText("Click to attach. " .. IGNORE_HINT .. " to never suggest.")
 
 	panel:SetHeight(-(footerY - 34) + 14 + PAD)
 	panel:SetScript("OnShow", function()
@@ -341,6 +405,12 @@ local function Build()
 	events:RegisterEvent("GET_ITEM_INFO_RECEIVED")
 	events:RegisterEvent("MAIL_SEND_SUCCESS")
 	events:SetScript("OnEvent", QueueRefresh)
+
+	-- Ignoring an item in your bags (Bank Alt) updates the list too.
+	local bankAlt = ns.byKey.bankalt
+	if bankAlt and bankAlt.ignoreListeners then
+		table.insert(bankAlt.ignoreListeners, QueueRefresh)
+	end
 end
 
 ---------------------------------------------------------------------------
