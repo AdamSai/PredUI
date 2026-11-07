@@ -476,14 +476,53 @@ end
 -- Flight time on the flight map's tooltips
 --------------------------------------------------------------------------------
 
+local function FormatCost(copper)
+	if MoneyFormatterUtil and MoneyFormatterUtil.FormatMoney and GameTooltipMoneyFormat then
+		local text = Try(MoneyFormatterUtil.FormatMoney, copper, GameTooltipMoneyFormat)
+		if Public(text) and type(text) == "string" and text ~= "" then return text end
+	end
+	local g, sv, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
+	return (g > 0 and g .. "g " or "") .. ((g > 0 or sv > 0) and sv .. "s " or "") .. c .. "c"
+end
+
+-- Whether the tooltip already has a line with exactly this text (Blizzard's own cost line).
+local function TooltipHasLine(text)
+	for i = 1, GameTooltip:NumLines() do
+		local line = _G["GameTooltipTextLeft" .. i]
+		local have = line and line:GetText()
+		if Public(have) and have == text then return true end
+	end
+	return false
+end
+
+-- The flight's cost. Blizzard's tooltip is meant to show it, but it can go missing,
+-- so add it unless it's already there.
+local function AddCostLine(slot)
+	local cost = PublicNumber(Try(TaxiNodeCost, slot))
+	if not cost or cost <= 0 then return end
+	local text = FormatCost(cost)
+	if TooltipHasLine(text) then return end
+	local money = PublicNumber(Try(GetMoney))
+	if money and money < cost then
+		GameTooltip:AddLine("Cost: " .. text, 1, 0.3, 0.3)
+	else
+		GameTooltip:AddLine("Cost: " .. text, 1, 1, 1)
+	end
+end
+
 -- Both flight map windows build their tooltip on hover and then call Show(); this
--- adds a line after that. The nodes were read when the map opened (TAXIMAP_OPENED).
+-- adds the cost and time after that. The nodes were read when the map opened
+-- (TAXIMAP_OPENED).
 local function AddTooltipLine(owner, slot)
 	if not db.tooltip or not Public(slot) or not slot then return end
 	if GameTooltip:GetOwner() ~= owner then return end
 	if not mapOrigin then ReadMapNodes() end
+	AddCostLine(slot)
 	local plan = PlanRoute(slot)
-	if not plan then return end
+	if not plan then
+		GameTooltip:Show()
+		return
+	end
 
 	local text
 	if not plan.total then
