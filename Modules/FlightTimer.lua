@@ -9,6 +9,8 @@
 --   * Until a route has been flown, its time is an estimate: the legs already
 --     learned, plus straight-line distance at a speed calibrated from your own
 --     flights. The bar labels which of these it is showing.
+--   * Hovering a destination on the flight map shows the same time in its tooltip
+--     (both the small TaxiFrame and the big FlightMapFrame are hooked).
 --
 -- Flights that were cut short (early landing, death, landing away from the
 -- destination) are never learned.
@@ -21,7 +23,7 @@ local Public, PublicNumber, PublicString, Try = ns.Public, ns.PublicNumber, ns.P
 local M = ns.NewModule("flight", {
 	title = "Flight Timer",
 	notes = "A faction-coloured bar counting down your flight. Learns each route's real time the first time you fly it.",
-	defaults = { locked = false },
+	defaults = { locked = false, tooltip = true },
 })
 
 local BAR_W, BAR_H = 340, 22
@@ -404,10 +406,9 @@ local function Tick()
 	end
 end
 
-local function OnTakeTaxiNode(destSlot)
-	if not Public(destSlot) then return end
-	ReadMapNodes()   -- mapNodes keeps what TAXIMAP_OPENED read if the map's already gone
-
+-- Everything known about a flight from where you stand to destSlot: the route's key,
+-- its estimated time and how sure that is. nil if the map can't say.
+local function PlanRoute(destSlot)
 	local destNode = mapNodes[destSlot]
 	local to = destNode and destNode.name or PublicString(Try(TaxiNodeName, destSlot))
 	if not (to and mapOrigin) then return end
@@ -453,18 +454,96 @@ local function OnTakeTaxiNode(destSlot)
 		yards = yards + d
 	end
 
-	pending = {
-		asked = GetTime(),
-		flight = {
-			key = table.concat(names, " > "),
-			to = to,
-			total = total,
-			kind = kind,
-			flights = flights,
-			yards = yards,
-			dest = destNode and destNode.x and { inst = destNode.inst, x = destNode.x, y = destNode.y } or nil,
-		},
+	return {
+		key = table.concat(names, " > "),
+		to = to,
+		total = total,
+		kind = kind,
+		flights = flights,
+		yards = yards,
+		dest = destNode and destNode.x and { inst = destNode.inst, x = destNode.x, y = destNode.y } or nil,
 	}
+end
+
+local function OnTakeTaxiNode(destSlot)
+	if not Public(destSlot) then return end
+	ReadMapNodes()   -- mapNodes keeps what TAXIMAP_OPENED read if the map's already gone
+	local plan = PlanRoute(destSlot)
+	if plan then pending = { asked = GetTime(), flight = plan } end
+end
+
+--------------------------------------------------------------------------------
+-- Flight time on the flight map's tooltips
+--------------------------------------------------------------------------------
+
+-- Both flight map windows build their tooltip on hover and then call Show(); this
+-- adds a line after that. The nodes were read when the map opened (TAXIMAP_OPENED).
+local function AddTooltipLine(owner, slot)
+	if not db.tooltip or not Public(slot) or not slot then return end
+	if GameTooltip:GetOwner() ~= owner then return end
+	if not mapOrigin then ReadMapNodes() end
+	local plan = PlanRoute(slot)
+	if not plan then return end
+
+	local text
+	if not plan.total then
+		text = "Flight time: unknown until you fly it"
+	elseif plan.kind == "learned" then
+		text = "Flight time: " .. Clock(math.floor(plan.total + 0.5))
+	else
+		text = ("Flight time: ~%s (estimate)"):format(Clock(math.floor(plan.total + 0.5)))
+	end
+	GameTooltip:AddLine(text, 1, 1, 1)
+	GameTooltip:Show()   -- resize to fit the new line
+end
+
+-- The small classic window (TaxiFrame). Its XML calls TaxiNodeOnButtonEnter by name.
+local function OnTaxiButtonEnter(button)
+	if not button then return end
+	local kind = Try(TaxiNodeGetType, button:GetID())
+	if not Public(kind) then return end
+	if kind == "REACHABLE" then
+		AddTooltipLine(button, button:GetID())
+	elseif kind == "UNREACHABLE" and db.tooltip and GameTooltip:GetOwner() == button then
+		-- Blizzard shows only the name here, which looks broken; say why there's no time.
+		GameTooltip:AddLine("No flight time: you can't fly here yet", 0.6, 0.6, 0.6)
+		GameTooltip:Show()
+	end
+end
+
+-- The big map (Blizzard_FlightMap, load on demand). Pins copy the mixin's OnMouseEnter
+-- when they're made, so hooking the mixin covers every pin made afterwards; pins that
+-- already exist get the hook on their OnEnter script instead.
+local hookedPins = setmetatable({}, { __mode = "k" })
+local mixinHooked
+
+local function OnPinEnter(pin)
+	local data = pin and pin.taxiNodeData
+	if type(data) ~= "table" then return end
+	if not (Enum.FlightPathState and data.state == Enum.FlightPathState.Reachable) then return end
+	AddTooltipLine(pin, PublicNumber(data.slotIndex))
+end
+
+local function HookFlightMap()
+	if not FlightMap_FlightPointPinMixin or mixinHooked then return end
+	mixinHooked = true
+	local iter, state, start
+	if FlightMapFrame and FlightMapFrame.EnumeratePinsByTemplate then
+		iter, state, start = FlightMapFrame:EnumeratePinsByTemplate("FlightMap_FlightPointPinTemplate")
+	end
+	if type(iter) == "function" then
+		for pin in iter, state, start do
+			if not hookedPins[pin] then
+				hookedPins[pin] = true
+				pin:HookScript("OnEnter", OnPinEnter)
+			end
+		end
+	end
+	hooksecurefunc(FlightMap_FlightPointPinMixin, "OnMouseEnter", OnPinEnter)
+end
+
+function M:OnAddonLoaded(name)
+	if name == "Blizzard_FlightMap" then HookFlightMap() end
 end
 
 local function OnEarlyLanding()
@@ -545,6 +624,20 @@ local function OnSlash(input)
 		M.ResetPosition()
 	elseif cmd == "status" then
 		M.Say(M.Status())
+	elseif cmd == "nodes" then
+		-- What the open flight map reports for each node, to check why a tooltip has no time.
+		local count = PublicNumber(Try(NumTaxiNodes)) or 0
+		if count == 0 then
+			M.Say("open the flight map at a flight master first.")
+			return
+		end
+		M.Say(("%d flight paths on this map:"):format(count))
+		for slot = 1, count do
+			local name = PublicString(Try(TaxiNodeName, slot)) or "?"
+			local kind = Try(TaxiNodeGetType, slot)
+			local hops = PublicNumber(Try(GetNumRoutes, slot)) or 0
+			print(("  %d. %s - %s, %d hop(s)"):format(slot, name, Public(kind) and tostring(kind) or "?", hops))
+		end
 	elseif cmd == "forget" then
 		M.Forget()
 	elseif cmd == "options" then
@@ -555,6 +648,7 @@ local function OnSlash(input)
 		print("  lock / unlock - stop or allow dragging")
 		print("  reset - put the bar back in its default place")
 		print("  status - how many routes have been learned")
+		print("  nodes - list the open flight map's flight paths and whether you can reach them")
 		print("  forget - erase every learned time")
 		print("  options - open the settings")
 	end
@@ -562,6 +656,7 @@ end
 
 M.options = {
 	{ type = "checkbox", key = "locked", label = "Lock the bar", tooltip = "Stop the bar from being dragged." },
+	{ type = "checkbox", key = "tooltip", label = "Flight time on the flight map", tooltip = "Show the learned or estimated flight time when you hover a destination at a flight master." },
 	{ type = "button", label = "Preview", button = "Test bar", tooltip = "Show a 30 second preview so you can place the bar.", func = function() M.Test() end },
 	{ type = "button", label = "Position", button = "Reset", tooltip = "Put the bar back in its default place.", func = function() M.ResetPosition() end },
 	{ type = "button", label = "Learned times", button = "Forget all", tooltip = "Erase every learned flight time.", func = function() M.Forget() end },
@@ -578,6 +673,8 @@ function M:Enable()
 	BuildBar()
 	if TakeTaxiNode then hooksecurefunc("TakeTaxiNode", OnTakeTaxiNode) end
 	if TaxiRequestEarlyLanding then hooksecurefunc("TaxiRequestEarlyLanding", OnEarlyLanding) end
+	if TaxiNodeOnButtonEnter then hooksecurefunc("TaxiNodeOnButtonEnter", OnTaxiButtonEnter) end
+	HookFlightMap()   -- in case Blizzard_FlightMap is already loaded
 
 	local driver = CreateFrame("Frame")
 	local sinceTick = 0
