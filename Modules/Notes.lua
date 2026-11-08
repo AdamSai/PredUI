@@ -19,6 +19,10 @@
 --     Click a quest: opens it in the quest log, or if it isn't there sets a
 --     waypoint where it starts (needs Questie). Click an item: its tooltip.
 --     Backspace or Delete on a tag removes all of it.
+--   * The same @ and # lists work in the chat box, after two letters, and put
+--     in a real quest or item link. Off with "Quest and item tags in chat".
+--     Chat boxes are Blizzard's, so they're only hooked, and nothing is stored
+--     on them. Not in combat, and not on slash commands.
 --   * SetHyperlinksEnabled is protected, so a note first made in combat gets
 --     its links after combat.
 --   * Pin: a pinned note has no close button and opens again after a login or
@@ -37,7 +41,7 @@ local S = ns.Style
 local M = ns.NewModule("notes", {
 	title = "Notes",
 	notes = "Post-it notes for reminders: a list of notes, pin one to keep it on screen, or have it open when you enter a zone or a capital city.",
-	defaults = { popup = true, sound = true, button = true, charOnly = true, opacity = 100 },
+	defaults = { popup = true, sound = true, button = true, charOnly = true, opacity = 100, chatTags = true },
 })
 
 local NOTE_W, NOTE_H = 260, 210
@@ -313,6 +317,7 @@ end
 
 local TAG_ROWS, TAG_ROW_H, TAG_W = 8, 18, 250
 local Tag = { sel = 1, results = {}, kind = "quest" }
+local chatBoxes = {}            -- [chat edit box] = true, the ones we've hooked
 local nameLists = {}            -- [kind] = sorted { { name, lower, id, level, kind }, ... }
 local nameToID = {}             -- [kind] = { [name] = id }
 local loadingNames = {}         -- [kind] = true while reading
@@ -540,6 +545,10 @@ function Tag.Draw()
 			local info
 			if r.kind == "item" then
 				info = PriceText(r.id) or ""
+				-- Chat needs a real link, which only exists once the client has the item.
+				if chatBoxes[Tag.box] and not ns.Try(C_Item.IsItemDataCachedByID, r.id) then
+					ns.Try(C_Item.RequestLoadItemDataByID, r.id)
+				end
 			else
 				info = r.level and r.level > 0 and ("Lvl " .. r.level) or ""
 				if r.inLog then info = info .. (info ~= "" and "  " or "") .. "|cff8fd16ein log|r" end
@@ -604,15 +613,22 @@ function Tag.Search()
 	local box, p = Tag.box, Tag.popup
 	Tag.Draw()
 	p:ClearAllPoints()
-	p:SetPoint("TOPLEFT", box, "TOPLEFT", math.max(0, math.min(box.tagX or 0, box:GetWidth() - 60)),
-		(box.tagY or 0) - (box.tagH or 14) - 2)
+	-- Keys go to the highest frame first, and the chat box is in DIALOG itself.
+	-- Blizzard's own name list uses TOOLTIP for the same reason.
+	p:SetFrameStrata(chatBoxes[box] and "TOOLTIP" or "DIALOG")
+	if chatBoxes[box] then
+		p:SetPoint("BOTTOMLEFT", box, "TOPLEFT", 0, 4)
+	else
+		p:SetPoint("TOPLEFT", box, "TOPLEFT", math.max(0, math.min(box.tagX or 0, box:GetWidth() - 60)),
+			(box.tagY or 0) - (box.tagH or 14) - 2)
+	end
 	p:Show()
 	-- In combat keys can't be passed on, so the box keeps them: Tab and Enter
 	-- still pick, but Up and Down move the cursor.
 	local combat = InCombatLockdown()
 	p:EnableKeyboard(not combat)
 	if not combat then p:SetPropagateKeyboardInput(true) end
-	Tag.TakeArrows(not combat and box or nil)
+	if not chatBoxes[box] then Tag.TakeArrows(not combat and box or nil) end
 end
 
 -- Opens, updates or closes the list for what's just before the cursor.
@@ -622,6 +638,11 @@ function Tag.Update(box)
 	local before = text:sub(1, cursor)
 	local at, sign, q = before:match("()([@#])([^@#%[%]\r\n]*)$")
 	if at and at > 1 and not before:sub(at - 1, at - 1):find("%s") then at = nil end
+	-- In chat @ and # are everyday characters ("meet @ the inn", "#1"), so the
+	-- list needs two letters right after them.
+	if at and chatBoxes[box] and (#q < 2 or q:find("^%s") or text:sub(1, 1) == "/" or InCombatLockdown()) then
+		at = nil
+	end
 	if not at or #q > 50 then
 		if Tag.box == box then Tag.Hide() end
 		return
@@ -643,6 +664,40 @@ function Tag.Accept(i)
 		return
 	end
 	local text = box:GetText() or ""
+	if chatBoxes[box] then
+		-- A real link; a quest or item the game can't link goes in as its name.
+		-- No saving here, and Blizzard's OnTextChanged runs by itself.
+		local link
+		if r.kind == "item" then
+			link = Tag.RealItemLink(r.id)
+		else
+			-- GetQuestLink only knows quests in your log, and the server strips a
+			-- hand-made link for any other. "[Name (ID)]" is Questie's chat format:
+			-- it survives sending, and Questie users get it as a link.
+			link = ns.PublicString(ns.Try(GetQuestLink, r.id))
+			if not link and r.id then link = ("[%s (%d)]"):format(r.name, r.id) end
+		end
+		local placeholder = "[" .. r.name .. "]"
+		local chatHead = text:sub(1, Tag.start - 1) .. (link or placeholder) .. " "
+		local chatTail = text:sub(Tag.stop + 1)
+		Tag.Hide()
+		box:SetText(chatHead .. chatTail)
+		box:SetCursorPosition(#chatHead)
+		-- The client didn't have the item yet: swap in the link when it arrives.
+		if not link and r.kind == "item" and Item and Item.CreateFromItemID then
+			local item = Item:CreateFromItemID(r.id)
+			ns.Try(item.ContinueOnItemLoad, item, function()
+				local real = Tag.RealItemLink(r.id)
+				local now = box:GetText() or ""
+				local from, to = now:find(placeholder, 1, true)
+				if real and from then
+					box:SetText(now:sub(1, from - 1) .. real .. now:sub(to + 1))
+					box:SetCursorPosition(from - 1 + #real + 1)
+				end
+			end)
+		end
+		return
+	end
 	local head = text:sub(1, Tag.start - 1) .. (r.kind == "item" and "#[" or "[") .. r.name .. "]"
 	local note = box.tagFrame and box.tagFrame.note
 	if note and r.id then
@@ -804,6 +859,8 @@ local function RealItemLink(id)
 	local _, link = ns.Try(C_Item.GetItemInfo, id)
 	return ns.PublicString(link)
 end
+
+Tag.RealItemLink = RealItemLink
 
 local function QuestName(id)
 	local quest = QuestieEntity("Quest")
@@ -1175,6 +1232,30 @@ RefreshView = function(f)
 		SetView(f.view, f.edit, f.note, f.note.text)
 		UpdateTextHolder(f)
 		UpdateScrollBar(f)
+	end
+end
+
+local function ChatText(box, userInput)
+	if userInput and db.chatTags then
+		Tag.Update(box)
+	elseif Tag.Owns(box) then
+		Tag.Hide()
+	end
+end
+
+local function ChatFocusLost(box)
+	if Tag.Owns(box) and not Tag.popup:IsMouseOver() then Tag.Hide() end
+end
+
+-- Hooks each chat window's edit box once.
+local function HookChatBoxes()
+	for i = 1, NUM_CHAT_WINDOWS or 10 do
+		local box = _G["ChatFrame" .. i .. "EditBox"]
+		if box and not chatBoxes[box] then
+			chatBoxes[box] = true
+			box:HookScript("OnTextChanged", ChatText)
+			box:HookScript("OnEditFocusLost", ChatFocusLost)
+		end
 	end
 end
 
@@ -1981,6 +2062,8 @@ local function OnSlash(msg)
 end
 
 M.options = {
+	{ type = "checkbox", key = "chatTags", label = "Quest and item tags in chat",
+		tooltip = "In the chat box, @ and # followed by two letters list quests and items. Tab or Enter puts in a link." },
 	{ type = "button", label = "Your notes", button = "Open list", tooltip = "The list of notes (/notes).", func = function() M.ToggleList() end },
 	{ type = "slider", key = "opacity", label = "Note opacity", min = 10, max = 100, step = 5,
 		format = function(v) return ("%d%%"):format(v) end,
@@ -2063,6 +2146,7 @@ function M:Enable()
 	events:SetScript("OnEvent", function(_, event)
 		if event == "PLAYER_ENTERING_WORLD" and not shownPinned then
 			shownPinned = true
+			HookChatBoxes()
 			for id, note in pairs(db.list) do
 				if note.pinned and Visible(note) then OpenNote(id) end
 			end
