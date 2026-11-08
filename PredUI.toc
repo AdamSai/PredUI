@@ -1,29 +1,41 @@
 ## Interface: 16001
 ## Title: PredUI
-## Notes: Our addons in one: Flight Timer, Craft Timer, Bag Value, Icon Search, Loot Room, Mail Ledger, Paladin Buffs, Bank Alt, Notes and Party Locations, with one settings menu. Type /predui.
+## Notes: Our addons in one: Flight Timer, Craft Timer, Breath Bar, Swing Timer, Bag Value, Icon Search, Loot Room, Mail Ledger, Paladin Buffs, Bank Alt, Notes, Party Locations, Invite Whispers, Hidden Stats, Questie Zones, Crate Prices and Craft Cost, with one settings menu. Type /predui.
 ## Author: Pred
-## Version: 1.22.0
+## Version: 1.48.0
 ## IconTexture: Interface\AddOns\PredUI\Media\Icon
 ## SavedVariables: PredUIDB
 ## SavedVariablesPerCharacter: PredUICharDB
-## OptionalDeps: Auctionator, Baganator, Syndicator
+## OptionalDeps: Auctionator, Baganator, Syndicator, Questie
 
 Core.lua
 Style.lua
+EditMode.lua
 Modules\FlightTimer.lua
 Modules\CraftTimer.lua
+Modules\BreathBar.lua
+Modules\SwingTimer.lua
 Modules\BagValue.lua
 Modules\IconSearch.lua
 Modules\LootRoom.lua
 Modules\MailLedger.lua
+Modules\MailLedgerAH.lua
 Modules\MailLedgerUI.lua
 Modules\MailSubject.lua
 Modules\MailSend.lua
 Modules\MailSendList.lua
 Modules\HiddenSettings.lua
+Launcher.lua
 Modules\PaladinBuffs.lua
 Modules\BankAlt.lua
 Modules\Notes.lua
 Modules\PartyLocations.lua
+Modules\InviteWhispers.lua
+Modules\HiddenStats.lua
+Modules\QuestieZones.lua
+Modules\CratePrices.lua
+Modules\CraftCost.lua
+Modules\CraftCostList.lua
+Modules\CraftCostFlip.lua
 Settings.lua
 Minimap.lua

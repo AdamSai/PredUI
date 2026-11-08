@@ -692,6 +692,10 @@ local function ToggleList()
 	end
 end
 
+M.launcher = {
+	{ icon = "Interface\\Icons\\INV_Misc_Bag_08", label = "Loot Room", hint = "Your lowest-value items (/lootroom show).", func = ToggleList },
+}
+
 local function SetCount(n)
 	n = tonumber(n)
 	if not n then return false end

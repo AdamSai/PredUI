@@ -477,6 +477,10 @@ function M.Open()
 	ShowWindow()
 end
 
+M.launcher = {
+	{ icon = "Interface\\Icons\\INV_Misc_Spyglass_03", label = "Icon Search", hint = "Search every icon by name (/iconsearch).", func = M.Open },
+}
+
 local function OnSlash(msg)
 	msg = strtrim(msg)
 	if msg == "options" then

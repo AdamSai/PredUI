@@ -21,6 +21,17 @@
 --     for it (saved account-wide; the zone seen most often wins, so one summon
 --     from elsewhere doesn't spoil it). The game's own sources are still tried.
 --     Until a dungeon is learned, the panel lists zones without marks.
+--   * Filters: a bar under the Group Finder hides listings by size (min/max
+--     players), solo players, groups with no open slot for a role you ticked,
+--     and words in the leader's name, title or comment. Blizzard builds the
+--     list as GetFilteredSearchResults -> LFGBrowseUtil_SortSearchResults(t)
+--     -> draw from t, so a post-hook on the sort removes entries from t in
+--     place (the order stays). Editing that table taints the list build, so
+--     it's only touched while a filter is on, and your own listing is never
+--     hidden. Anything we can't read (secret, missing) keeps the group shown.
+--     Titles and comments are "kstring" values that may come back protected
+--     (|K...|k) and unreadable; then only the leader's name is searched
+--     (/partyloc filters tells which).
 --------------------------------------------------------------------------------
 
 local _, ns = ...
@@ -29,10 +40,16 @@ local Public, PublicNumber, PublicString, Try = ns.Public, ns.PublicNumber, ns.P
 
 local M = ns.NewModule("partyloc", {
 	title = "Party Locations",
-	notes = "Shows where a listed group's leader is, on the Group Finder's Browse tab.",
+	notes = "Shows where a listed group's leader is, and filters the Group Finder's Browse list by group size, role and text.",
 	defaults = {
 		show = true,          -- show the panel on the Browse tab
 		hover = true,         -- follow the group under the mouse, not just the selected one
+		filterBar = true,     -- show the filter bar under the Group Finder
+		minPlayers = 0,       -- 0 = no limit
+		maxPlayers = 0,       -- 0 = no limit
+		noSolo = false,       -- hide single players looking for a group
+		myRole = false,       -- hide groups with no open slot for a role you ticked
+		search = "",          -- words that must all appear (leader, title, comment)
 	},
 })
 
@@ -45,9 +62,16 @@ local LEADER_ICON = "|TInterface\\GroupFrame\\UI-Group-LeaderIcon:12:12|t"
 
 local ZONE_TYPE = Enum.UIMapType and Enum.UIMapType.Zone or 3
 
+local MAX_PLAYERS = 40         -- largest raid
+local FILTER_DELAY = 0.3       -- seconds after the last keystroke before the list reruns
+
 local db
 local panel
+local bar                      -- the filter bar
 local testMode = false
+local QueueRefresh             -- defined with the panel
+local stats = { hidden = 0, total = 0 }
+local textReadable             -- nil = not seen yet; true/false = titles/comments readable
 local hoveredResult            -- search result under the mouse, while its tooltip shows
 local lastZone                 -- uiMapID of the last outdoor zone you were in
 local entranceZones            -- [journalInstanceID] = zone uiMapID, built once
@@ -278,6 +302,175 @@ local function FakeResult()
 end
 
 --------------------------------------------------------------------------------
+-- Filters
+--------------------------------------------------------------------------------
+
+local function Words(text)
+	local words = {}
+	for w in tostring(text or ""):lower():gmatch("%S+") do words[#words + 1] = w end
+	return words
+end
+
+-- The filters as they apply now: min/max (0 = none, swapped if reversed),
+-- noSolo, roles (the ticked roles, or nil) and words.
+local function CurrentFilters()
+	local f = {
+		min = math.max(0, math.floor(tonumber(db.minPlayers) or 0)),
+		max = math.max(0, math.floor(tonumber(db.maxPlayers) or 0)),
+		noSolo = db.noSolo and true or false,
+		words = Words(db.search),
+	}
+	if f.min > 0 and f.max > 0 and f.min > f.max then f.min, f.max = f.max, f.min end
+	if db.myRole and C_LFGListRoles then
+		local roles = Try(C_LFGListRoles.GetRoles)
+		if type(roles) == "table" and Public(roles.tank) then
+			local tank, healer, dps = roles.tank == true, roles.healer == true, roles.dps == true
+			if tank or healer or dps then f.roles = { tank = tank, healer = healer, dps = dps } end
+		end
+	end
+	return f
+end
+
+local function FiltersActive()
+	return (tonumber(db.minPlayers) or 0) > 0 or (tonumber(db.maxPlayers) or 0) > 0
+		or db.noSolo or db.myRole or #Words(db.search) > 0
+end
+
+-- Text we can search: plain, not secret and not a protected |K string.
+local function Readable(s)
+	s = PublicString(s)
+	if s and not s:find("|K", 1, true) then return s end
+end
+
+local function Remaining(counts, key)
+	return PublicNumber(counts[key])
+end
+
+-- Does one search result pass? Unreadable values keep it.
+local function Passes(resultID, f)
+	local info = Try(C_LFGList.GetSearchResultInfo, resultID)
+	if type(info) ~= "table" then return true end
+	if Public(info.hasSelf) and info.hasSelf == true then return true end
+
+	local n = PublicNumber(info.numMembers)
+	if n then
+		if f.min > 0 and n < f.min then return false end
+		if f.max > 0 and n > f.max then return false end
+		if f.noSolo and n <= 1 then return false end
+	end
+
+	if f.roles and n and n > 1 then
+		local counts = Try(C_LFGList.GetSearchResultMemberCounts, resultID)
+		if type(counts) == "table" and Public(counts) then
+			local tank = Remaining(counts, "TANK_REMAINING")
+			local healer = Remaining(counts, "HEALER_REMAINING")
+			local dps = Remaining(counts, "DAMAGER_REMAINING")
+			if tank or healer or dps then
+				local fits = (f.roles.tank and (tank or 0) > 0)
+					or (f.roles.healer and (healer or 0) > 0)
+					or (f.roles.dps and (dps or 0) > 0)
+				if not fits then return false end
+			end
+		end
+	end
+
+	if #f.words > 0 then
+		local parts = {}
+		local leader = Readable(info.leaderName)
+		if leader then parts[#parts + 1] = leader:lower() end
+		for _, key in ipairs({ "name", "comment" }) do
+			local raw = info[key]
+			local s = Readable(raw)
+			if s then
+				parts[#parts + 1] = s:lower()
+				textReadable = true
+			elseif (not Public(raw) or (raw ~= nil and raw ~= "")) and textReadable == nil then
+				textReadable = false
+			end
+		end
+		local text = table.concat(parts, "\n")
+		for _, w in ipairs(f.words) do
+			if not text:find(w, 1, true) then return false end
+		end
+	end
+	return true
+end
+
+-- Post-hook on LFGBrowseUtil_SortSearchResults(results): drop what doesn't pass.
+local hiddenIDs = {}            -- [resultID] = true for what the last pass hid
+
+local function ApplyFilters(results)
+	if not db or type(results) ~= "table" or not Public(results) then return end
+	stats.total, stats.hidden = #results, 0
+	wipe(hiddenIDs)
+	if FiltersActive() then
+		local f = CurrentFilters()
+		for i = #results, 1, -1 do
+			local resultID = results[i]
+			if not Passes(resultID, f) then
+				table.remove(results, i)
+				stats.hidden = stats.hidden + 1
+				if PublicNumber(resultID) then hiddenIDs[resultID] = true end
+			end
+		end
+	end
+	if QueueRefresh then QueueRefresh() end
+end
+
+-- Redraw Blizzard's list from the results it already has (no new search).
+local rerunTimer
+local function RerunList()
+	if rerunTimer then rerunTimer:Cancel() end
+	rerunTimer = C_Timer.NewTimer(FILTER_DELAY, function()
+		rerunTimer = nil
+		local browse = LFGBrowseFrame
+		if browse and browse:IsShown() and browse.UpdateResultList then
+			Try(browse.UpdateResultList, browse)
+		end
+		if QueueRefresh then QueueRefresh() end
+	end)
+end
+
+local SyncBar                  -- defined with the bar
+
+-- A listed group changed (someone joined or left). Blizzard updates that row
+-- without rebuilding the list, so the filters never see it: if it should now
+-- be hidden, or shown again, redraw the list.
+local function ResultChanged(resultID)
+	resultID = PublicNumber(resultID)
+	if not (resultID and db and FiltersActive()) then return end
+	local passes = Passes(resultID, CurrentFilters())
+	if passes == (hiddenIDs[resultID] == true) then RerunList() end
+end
+
+local function FiltersChanged()
+	if SyncBar then SyncBar() end
+	RerunList()
+end
+
+local function ClearFilters()
+	db.minPlayers, db.maxPlayers, db.noSolo, db.myRole, db.search = 0, 0, false, false, ""
+	FiltersChanged()
+end
+
+-- Whether titles/comments can be searched, from the current results.
+local function ProbeText()
+	local _, results = Try(C_LFGList.GetFilteredSearchResults)
+	if type(results) ~= "table" or not Public(results) then return textReadable end
+	for _, resultID in ipairs(results) do
+		local info = Try(C_LFGList.GetSearchResultInfo, resultID)
+		if type(info) == "table" then
+			for _, key in ipairs({ "name", "comment" }) do
+				local raw = info[key]
+				if Readable(raw) then textReadable = true return true end
+				if not Public(raw) or (raw ~= nil and raw ~= "") then textReadable = false end
+			end
+		end
+	end
+	return textReadable
+end
+
+--------------------------------------------------------------------------------
 -- Panel
 --------------------------------------------------------------------------------
 
@@ -289,6 +482,17 @@ local STATUS_TEXT = {
 	[""] = "",
 }
 
+-- Beside the Group Finder (under its Who tab when that shows).
+local function PlaceBeside(frame)
+	frame:ClearAllPoints()
+	local tab = LFGParentFrame.WhoListingTab
+	if tab and tab:IsShown() then
+		frame:SetPoint("TOPLEFT", tab, "BOTTOMLEFT", 2, -14)
+	else
+		frame:SetPoint("TOPLEFT", LFGParentFrame, "TOPRIGHT", 4, -8)
+	end
+end
+
 local function Place(hovering)
 	panel:ClearAllPoints()
 	local tip = LFGBrowseSearchEntryTooltip
@@ -299,12 +503,150 @@ local function Place(hovering)
 		return
 	end
 	panel:SetFrameStrata(LFGParentFrame:GetFrameStrata())
-	local tab = LFGParentFrame.WhoListingTab
-	if tab and tab:IsShown() then
-		panel:SetPoint("TOPLEFT", tab, "BOTTOMLEFT", 2, -14)
-	else
-		panel:SetPoint("TOPLEFT", LFGParentFrame, "TOPRIGHT", 4, -8)
+	PlaceBeside(panel)
+end
+
+--------------------------------------------------------------------------------
+-- Filter bar
+--------------------------------------------------------------------------------
+
+local function Tip(frame, text)
+	frame:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_TOP")
+		GameTooltip:SetText(type(text) == "function" and text() or text, nil, nil, nil, nil, true)
+		GameTooltip:Show()
+	end)
+	frame:SetScript("OnLeave", GameTooltip_Hide)
+end
+
+local function SearchTip()
+	local s = "Only groups whose leader, title or comment has all these words."
+	if textReadable == false then
+		s = s .. "\n\n" .. S.WARN .. "The game hides group titles and comments from addons here, so only the leader's name is searched.|r"
 	end
+	return s
+end
+
+local function NumberBox(key)
+	local e = S.EditBox(bar, 30, 20)
+	e:SetNumeric(true)
+	e:SetMaxLetters(2)
+	e:SetJustifyH("CENTER")
+	e:SetTextInsets(2, 2, 0, 0)
+	e:SetScript("OnEnterPressed", e.ClearFocus)
+	e:SetScript("OnTextChanged", function(self, userInput)
+		if not userInput then return end
+		db[key] = math.min(MAX_PLAYERS, tonumber(self:GetText()) or 0)
+		RerunList()
+	end)
+	e:HookScript("OnEditFocusLost", function() SyncBar() end)
+	return e
+end
+
+local function Check(key, label, tooltip)
+	local c = CreateFrame("CheckButton", nil, bar, "UICheckButtonTemplate")
+	c:SetSize(22, 22)
+	c.label = S.Text(bar, 11)
+	c.label:SetPoint("LEFT", c, "RIGHT", 1, 1)
+	c.label:SetText(label)
+	c:SetScript("OnClick", function(self)
+		db[key] = self:GetChecked() and true or false
+		FiltersChanged()
+	end)
+	Tip(c, tooltip)
+	return c
+end
+
+local function BuildBar()
+	if bar or not LFGParentFrame then return end
+	bar = CreateFrame("Frame", "PredUIPartyFilters", LFGParentFrame)
+	-- Under the Group Finder: Blizzard's group tooltip opens to its right,
+	-- beside the hovered row, so anything there gets covered.
+	bar:SetHeight(64)
+	bar:SetPoint("TOPLEFT", LFGParentFrame, "BOTTOMLEFT", 4, -6)
+	bar:SetPoint("TOPRIGHT", LFGParentFrame, "BOTTOMRIGHT", -4, -6)
+	bar:Hide()
+	S.Body(bar)
+	S.Glow(bar)
+
+	local players = S.Text(bar, 12)
+	players:SetPoint("TOPLEFT", S.PAD, -14)
+	players:SetText("Players")
+	bar.min = NumberBox("minPlayers")
+	bar.min:SetPoint("LEFT", players, "RIGHT", 8, 0)
+	local to = S.Text(bar, 11)
+	to:SetPoint("LEFT", bar.min, "RIGHT", 6, 0)
+	to:SetText("to")
+	bar.max = NumberBox("maxPlayers")
+	bar.max:SetPoint("LEFT", to, "RIGHT", 6, 0)
+	Tip(bar.min, "Hide groups with fewer players than this. Empty means no limit.")
+	Tip(bar.max, "Hide groups with more players than this. Empty means no limit.")
+
+	local clear = S.Button(bar, "Clear", 54, 20)
+	clear:SetPoint("TOPRIGHT", -S.PAD, -10)
+	clear.tooltip = "Turn every filter off."
+	clear:SetScript("OnClick", ClearFilters)
+
+	bar.search = S.EditBox(bar, 10, 20)
+	bar.search:SetPoint("TOPLEFT", S.PAD, -36)
+	bar.search:SetPoint("TOPRIGHT", -130, -36)
+	bar.search:SetMaxLetters(60)
+	bar.search:SetScript("OnEnterPressed", bar.search.ClearFocus)
+	bar.search.hint = S.Text(bar.search, 11)
+	bar.search.hint:SetPoint("LEFT", 6, 0)
+	bar.search.hint:SetText("Search leader, title or comment")
+	bar.search.hint:SetTextColor(0.5, 0.5, 0.5)
+	local function Hint(self) self.hint:SetShown(self:GetText() == "" and not self:HasFocus()) end
+	bar.search:SetScript("OnTextChanged", function(self, userInput)
+		Hint(self)
+		if not userInput then return end
+		db.search = self:GetText()
+		RerunList()
+	end)
+	bar.search:HookScript("OnEditFocusGained", Hint)
+	bar.search:HookScript("OnEditFocusLost", Hint)
+	Tip(bar.search, SearchTip)
+
+	bar.noSolo = Check("noSolo", "No solo", "Hide single players looking for a group.")
+	bar.noSolo:SetPoint("LEFT", bar.max, "RIGHT", 14, 0)
+	bar.myRole = Check("myRole", "My role", "Hide groups with no open slot for any role you ticked in the Group Finder.")
+	bar.myRole:SetPoint("LEFT", bar.noSolo.label, "RIGHT", 10, -1)
+
+	bar.status = S.Text(bar, 11)
+	bar.status:SetPoint("LEFT", bar.search, "RIGHT", 8, 0)
+	bar.status:SetPoint("RIGHT", -S.PAD, 0)
+	bar.status:SetJustifyH("RIGHT")
+end
+
+function SyncBar()
+	if not bar then return end
+	local function Num(v) v = tonumber(v) or 0 return v > 0 and tostring(v) or "" end
+	if not bar.min:HasFocus() then bar.min:SetText(Num(db.minPlayers)) end
+	if not bar.max:HasFocus() then bar.max:SetText(Num(db.maxPlayers)) end
+	if not bar.search:HasFocus() then bar.search:SetText(db.search or "") end
+	bar.noSolo:SetChecked(db.noSolo and true or false)
+	bar.myRole:SetChecked(db.myRole and true or false)
+end
+
+local function StatusLine()
+	if testMode then return S.WARN .. "3|r of 17 hidden" end
+	if not FiltersActive() then return S.DIM .. "No filters|r" end
+	if stats.total > 0 and stats.hidden == stats.total then
+		return S.WARN .. "All " .. stats.total .. " hidden|r"
+	end
+	if stats.hidden == 0 then return S.DIM .. "None hidden|r" end
+	return S.WARN .. stats.hidden .. "|r of " .. stats.total .. " hidden"
+end
+
+local function UpdateBar(browsing)
+	if not bar then return end
+	if not (db.filterBar and (browsing or testMode)) then
+		bar:Hide()
+		return
+	end
+	if not bar:IsShown() then SyncBar() end
+	bar.status:SetText(StatusLine())
+	bar:Show()
 end
 
 local function GetRow(i)
@@ -345,6 +687,7 @@ end
 local function Refresh()
 	if not panel then return end
 	local browsing = LFGParentFrame:IsShown() and LFGBrowseFrame and LFGBrowseFrame:IsShown()
+	UpdateBar(browsing)
 	local resultID = not testMode and browsing and db.show and CurrentResult()
 	local g = testMode and FakeResult() or (resultID and ReadResult(resultID))
 	if not (g and (testMode or browsing)) then
@@ -400,7 +743,7 @@ local function Refresh()
 end
 
 local queued = false
-local function QueueRefresh()
+function QueueRefresh()
 	if queued then return end
 	queued = true
 	C_Timer.After(0.05, function()
@@ -421,6 +764,12 @@ local function BuildPanel()
 	panel.summary = S.Text(panel, 11)
 	panel.summary:SetJustifyH("LEFT")
 	panel.summary:SetWordWrap(true)
+	BuildBar()
+
+	-- Blizzard sorts the results right before drawing them; filter there.
+	if LFGBrowseUtil_SortSearchResults then
+		hooksecurefunc("LFGBrowseUtil_SortSearchResults", ApplyFilters)
+	end
 
 	-- Members move around; redraw while shown, and only then.
 	local elapsed = 0
@@ -476,6 +825,10 @@ local function OpenGroupFinder()
 	return true
 end
 
+M.launcher = {
+	{ icon = "Interface\\Icons\\INV_Misc_GroupNeedMore", label = "Group Finder", hint = "Browse and filter listed groups and see where their leaders are (/partyloc).", func = OpenGroupFinder },
+}
+
 local function PrintZones()
 	local resultID = CurrentResult()
 	local result = resultID and Try(C_LFGList.GetSearchResultInfo, resultID)
@@ -498,6 +851,41 @@ local function PrintZones()
 	M.Say(("the game knows %d dungeon entrances here."):format(n))
 end
 
+local function PrintFilters()
+	local f = CurrentFilters()
+	local size
+	if f.min > 0 and f.max > 0 then size = f.min .. " to " .. f.max
+	elseif f.min > 0 then size = f.min .. " or more"
+	elseif f.max > 0 then size = f.max .. " or fewer"
+	else size = "any" end
+	M.Say("filters:")
+	print("  Players: " .. size)
+	print("  No solo: " .. (f.noSolo and "on" or "off"))
+	local roleText = "off"
+	if db.myRole then
+		if f.roles then
+			local names = {}
+			if f.roles.tank then names[#names + 1] = "tank" end
+			if f.roles.healer then names[#names + 1] = "healer" end
+			if f.roles.dps then names[#names + 1] = "damage" end
+			roleText = "on (" .. table.concat(names, ", ") .. ")"
+		else
+			roleText = "on, but no role is ticked in the Group Finder, so it does nothing"
+		end
+	end
+	print("  My role: " .. roleText)
+	print("  Search: " .. (#f.words > 0 and table.concat(f.words, " ") or "none"))
+	print("  Hidden: " .. (FiltersActive() and (stats.hidden .. " of " .. stats.total) or "nothing"))
+	local readable = ProbeText()
+	if readable == true then
+		print("  Group titles and comments can be searched.")
+	elseif readable == false then
+		print("  Group titles and comments are hidden from addons; only leader names are searched.")
+	else
+		print("  Search a category first to see whether titles and comments can be searched.")
+	end
+end
+
 local function OnSlash(msg)
 	msg = msg:lower():match("^%s*(.-)%s*$")
 	if msg == "test" then
@@ -512,6 +900,11 @@ local function OnSlash(msg)
 			QueueRefresh()
 			M.Say("learned zones cleared.")
 		end)
+	elseif msg == "filters" then
+		PrintFilters()
+	elseif msg == "clear" then
+		ClearFilters()
+		M.Say("filters cleared.")
 	elseif msg == "options" then
 		ns.OpenSettings(M)
 	elseif msg == "" then
@@ -521,16 +914,26 @@ local function OnSlash(msg)
 		print("  /partyloc - open the Group Finder's Browse tab")
 		print("  /partyloc test - show the panel with a made-up group")
 		print("  /partyloc zones - which zone the selected group's dungeon is in, and where that came from")
+		print("  /partyloc filters - show the filters and what they hide")
+		print("  /partyloc clear - turn every filter off")
 		print("  /partyloc forget - forget learned dungeon zones")
 		print("  /partyloc options - settings")
 	end
 end
 
 M.options = {
+	{ type = "header", label = "Members panel" },
 	{ type = "checkbox", key = "show", label = "Show the panel", tooltip = "On the Browse tab, show the selected group's members and where its leader is.", onChange = QueueRefresh },
 	{ type = "checkbox", key = "hover", label = "Follow the mouse", tooltip = "Show the group under the mouse (under its tooltip), not just the selected one.", onChange = QueueRefresh },
 	{ type = "button", label = "Preview", button = "Test", tooltip = "Show the panel with a made-up group. Also /partyloc test.", func = function() OnSlash("test") end },
 	{ type = "button", label = "Learned zones", button = "Forget", tooltip = "Forget which zone each dungeon is in. It's learned again as you enter them.", func = function() OnSlash("forget") end },
+	{ type = "header", label = "Filters", tooltip = "Hide listings on the Browse tab. Also on the bar under the Group Finder." },
+	{ type = "checkbox", key = "filterBar", label = "Show the filter bar", tooltip = "A bar under the Group Finder's Browse tab with the filters below and a text search. Filters still apply when it's hidden.", onChange = QueueRefresh },
+	{ type = "slider", key = "minPlayers", label = "Fewest players", min = 0, max = MAX_PLAYERS, step = 1, format = function(v) return v == 0 and "Any" or tostring(v) end, tooltip = "Hide groups with fewer players than this.", onChange = FiltersChanged },
+	{ type = "slider", key = "maxPlayers", label = "Most players", min = 0, max = MAX_PLAYERS, step = 1, format = function(v) return v == 0 and "Any" or tostring(v) end, tooltip = "Hide groups with more players than this.", onChange = FiltersChanged },
+	{ type = "checkbox", key = "noSolo", label = "Hide solo players", tooltip = "Hide single players looking for a group.", onChange = FiltersChanged },
+	{ type = "checkbox", key = "myRole", label = "Only groups with a slot for my role", tooltip = "Hide groups with no open slot for any role you ticked in the Group Finder.", onChange = FiltersChanged },
+	{ type = "button", label = "All filters", button = "Clear", tooltip = "Turn every filter off. Also /partyloc clear.", func = function() OnSlash("clear") end },
 }
 
 --------------------------------------------------------------------------------
@@ -552,8 +955,12 @@ function M:Enable()
 	events:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 	events:RegisterEvent("ZONE_CHANGED")
 	events:RegisterEvent("LFG_LIST_SEARCH_RESULT_UPDATED")
-	events:SetScript("OnEvent", function(_, event)
-		if event ~= "LFG_LIST_SEARCH_RESULT_UPDATED" then TrackZone() end
+	events:SetScript("OnEvent", function(_, event, ...)
+		if event == "LFG_LIST_SEARCH_RESULT_UPDATED" then
+			ResultChanged(...)
+		else
+			TrackZone()
+		end
 		QueueRefresh()
 	end)
 end

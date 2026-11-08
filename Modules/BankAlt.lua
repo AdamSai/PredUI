@@ -28,6 +28,11 @@
 --   * Default bags and bank: re-applied from the same redraw hooks Bag Value
 --     uses, debounced.
 --   * Auctionator: prices are re-read whenever it finishes a scan.
+--   * Baganator Quest category: items your quests need (the scroll) are added
+--     to it the same way dragging an item onto a category does (Baganator's
+--     CategoryAddItemStart/End callbacks), since "#quest" only matches
+--     quest-class items. db.questCategoryAdded remembers what we added, so
+--     only those are taken out again once no quest needs them.
 --------------------------------------------------------------------------------
 
 local _, ns = ...
@@ -49,6 +54,7 @@ local M = ns.NewModule("bankalt", {
 		tierColors = true,       -- colour the coin by how far the AH price is above vendor
 		lockBound = true,        -- padlock on soulbound items
 		questMark = true,        -- scroll on items your current quests need
+		questCategory = true,    -- put those items in Baganator's Quest category
 		tooltipPercent = true,   -- "AH vs vendor" line under Auctionator's prices
 	},
 })
@@ -668,6 +674,86 @@ local function SetupBaganator()
 end
 
 --------------------------------------------------------------------------------
+-- Baganator Quest category
+--------------------------------------------------------------------------------
+
+-- Baganator has no API for this, but its public CallbackRegistry carries the
+-- same two events its own drag-onto-category uses: Start(from, itemID, link)
+-- then End(to). End(nil) takes the item out of "from". Each End saves
+-- Baganator's settings and re-sorts the bags.
+local QUEST_CATEGORY = "default_questitem"
+local questLogRead = false     -- no removals before the quest log has loaded
+
+local function MoveCategory(fromCategory, toCategory, itemID, link)
+	local registry = Baganator and Baganator.CallbackRegistry
+	if not (registry and registry.TriggerEvent) then return false end
+	return ns.Try(function()
+		registry:TriggerEvent("CategoryAddItemStart", fromCategory, itemID, link)
+		registry:TriggerEvent("CategoryAddItemEnd", toCategory)
+		return true
+	end) or false
+end
+
+-- Items in your bags (read live: Syndicator's copy can lag a moment behind
+-- BAG_UPDATE_DELAYED) and bank (Syndicator's copy, which has the bank even
+-- when it's closed).
+local function ForEachOwnItem(func)
+	for bag = 0, NUM_BAG_SLOTS or 4 do
+		for slot = 1, (ns.Try(C_Container.GetContainerNumSlots, bag)) or 0 do
+			local info = ns.Try(C_Container.GetContainerItemInfo, bag, slot)
+			local itemID = info and ns.PublicNumber(info.itemID)
+			if itemID and ns.PublicString(info.hyperlink) then func(itemID, info.hyperlink) end
+		end
+	end
+	local syndicator = Syndicator and Syndicator.API
+	local name = syndicator and syndicator.GetCurrentCharacter and ns.Try(syndicator.GetCurrentCharacter)
+	local data = name and syndicator.GetByCharacterFullName and ns.Try(syndicator.GetByCharacterFullName, name)
+	for _, bag in ipairs(data and data.bank or {}) do
+		for _, item in ipairs(bag) do
+			if item.itemID and item.itemLink then func(item.itemID, item.itemLink) end
+		end
+	end
+end
+
+-- Lowercase name of an item a current quest needs that "#quest" wouldn't
+-- already catch, else nil.
+local function QuestCategoryName(link)
+	if IsIgnored(link) then return end
+	local name, _, _, _, _, _, _, _, _, _, _, classID = C_Item.GetItemInfo(link)
+	name = ns.PublicString(name)
+	if not name or classID == QUEST_ITEM_CLASS then return end
+	name = name:lower()
+	return questNames[name] and name or nil
+end
+
+local function SyncQuestCategory()
+	if not (db and Baganator and Baganator.CallbackRegistry) or testMode then return end
+	if C_Cursor and C_Cursor.GetCursorItem and C_Cursor.GetCursorItem() then return end  -- user is dragging
+	local added = db.questCategoryAdded
+	local want = M.enabled and db.questCategory
+
+	if want then
+		ForEachOwnItem(function(itemID, link)
+			local key = "i:" .. itemID
+			if added[key] then return end
+			local name = QuestCategoryName(link)
+			if name and MoveCategory(nil, QUEST_CATEGORY, itemID, link) then
+				added[key] = name
+			end
+		end)
+	end
+
+	if not questLogRead and want then return end
+	for key, name in pairs(added) do
+		local itemID = tonumber(key:match("^i:(%d+)$"))
+		if not (want and questNames[name] and not (itemID and db.ignored[itemID])) then
+			if itemID then MoveCategory(QUEST_CATEGORY, nil, itemID, "item:" .. itemID) end
+			added[key] = nil
+		end
+	end
+end
+
+--------------------------------------------------------------------------------
 -- Auctionator Selling tab
 --------------------------------------------------------------------------------
 
@@ -790,7 +876,11 @@ end
 
 local QueueRefresh = Debounced(RefreshDefault)
 local QueueRefreshAll = Debounced(RefreshAll)
-OnIgnoreChanged = QueueRefreshAll
+local QueueQuestCategory = Debounced(SyncQuestCategory)
+OnIgnoreChanged = function()
+	QueueRefreshAll()
+	QueueQuestCategory()
+end
 
 --------------------------------------------------------------------------------
 -- Commands
@@ -983,6 +1073,7 @@ M.options = {
 		format = function(v) return "+" .. math.floor(v + 0.5) .. "%" end },
 	{ type = "header", label = "Other" },
 	{ type = "checkbox", key = "questMark", label = "Scroll on quest items", tooltip = "A yellow scroll on items your current quests need, including ones you've already collected enough of (you still need them to hand in). In Baganator it's the \"PredUI: quest item\" corner icon.", onChange = Changed },
+	{ type = "checkbox", key = "questCategory", label = "Quest items in Baganator's Quest category", tooltip = "Items your current quests need (the ones with the scroll) are sorted into Baganator's Quest category, and taken out again once you hand the quest in. Items you move to another category yourself stay where you put them.", onChange = function() SyncQuestCategory() end },
 	{ type = "checkbox", key = "lockBound", label = "Padlock on soulbound items", tooltip = "A small padlock on soulbound items, so you can see what can't go to an alt. In Baganator it's the \"PredUI: soulbound\" corner icon.", onChange = Changed },
 	{ type = "checkbox", key = "tooltipPercent", label = "AH vs vendor in tooltips", tooltip = "Adds how much more (or less) the AH price is than the vendor price, under Auctionator's price lines.", },
 	{ type = "button", label = "Items to send", button = "List", tooltip = "Lists what in your bags is worth sending to your bank alt. Also /bankalt list.", func = ListItems },
@@ -996,6 +1087,7 @@ M.options = {
 function M:Enable()
 	db = self.db
 	if type(db.ignored) ~= "table" then db.ignored = {} end
+	if type(db.questCategoryAdded) ~= "table" then db.questCategoryAdded = {} end
 
 	ForEachContainerFrame(function(frame)
 		frame:HookScript("OnShow", QueueRefresh)
@@ -1017,12 +1109,20 @@ function M:Enable()
 	questEvents:RegisterEvent("QUEST_LOG_UPDATE")
 	questEvents:RegisterEvent("PLAYER_ENTERING_WORLD")
 	local questPending = false
-	questEvents:SetScript("OnEvent", function()
+	questEvents:SetScript("OnEvent", function(_, event)
 		if questPending then return end
 		questPending = true
 		C_Timer.After(0.5, function()
 			questPending = false
-			if ScanQuestLog() then QueueRefreshAll() end
+			local changed = ScanQuestLog()
+			if event == "QUEST_LOG_UPDATE" and not questLogRead then
+				questLogRead = true
+				changed = true
+			end
+			if changed then
+				QueueRefreshAll()
+				QueueQuestCategory()
+			end
 		end)
 	end)
 
@@ -1036,7 +1136,10 @@ function M:Enable()
 	events:RegisterEvent("PLAYERBANKSLOTS_CHANGED")
 	events:RegisterEvent("BANKFRAME_OPENED")
 	events:RegisterEvent("GET_ITEM_INFO_RECEIVED")
-	events:SetScript("OnEvent", QueueRefresh)
+	events:SetScript("OnEvent", function()
+		QueueRefresh()
+		QueueQuestCategory()
+	end)
 end
 
 SLASH_PREDUIBANKALT1 = "/bankalt"

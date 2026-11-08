@@ -10,6 +10,8 @@ local PADDING = S.PAD
 local ROW_HEIGHT = 15
 local LOG_HEIGHT = 96
 local LOG_PREFILL = 40
+local SALE_ROWS = 5
+local SALE_NAME_WIDTH = 165
 
 local DIM, GOOD, BAD, WARN = S.DIM, S.GOOD, S.BAD, S.WARN
 
@@ -132,6 +134,35 @@ end
 -- Refresh
 ---------------------------------------------------------------------------
 
+-- Sold auctions whose mail is on its way: up to SALE_ROWS rows, then a total.
+local function RefreshSales()
+	local list, total = L.RealmIncomingAuctions()
+	for i = 1, SALE_ROWS do
+		local key, row = "sale" .. i, list[i]
+		if row then
+			local sale = row.sale
+			local count = (sale.count and sale.count > 1) and (" x" .. sale.count) or ""
+			labels[key]:SetText(L.SaleOwnerPrefix(row) .. tostring(sale.item) .. count)
+			local net = L.SaleNet(sale)
+			local when = L.SaleWhen(sale)
+			if L.SaleArrival(sale) <= time() then when = GOOD .. when .. "|r" end
+			SetValue(key, (net and L.Money(net) or (DIM .. "?|r")) .. DIM .. " · |r" .. when)
+		elseif i == 1 then
+			labels[key]:SetText(DIM .. "Nothing sold yet|r")
+			SetValue(key, "")
+		else
+			labels[key]:SetText("")
+			SetValue(key, "")
+		end
+	end
+	if #list > SALE_ROWS then
+		labels.saleMore:SetText(DIM .. "and " .. (#list - SALE_ROWS) .. " more (/mledger sales)|r")
+	else
+		labels.saleMore:SetText("")
+	end
+	SetMoney("saleTotal", total)
+end
+
 local function Refresh()
 	if not panel or not panel:IsShown() then return end
 
@@ -182,6 +213,8 @@ local function Refresh()
 		SetValue("expires", DIM .. "?|r")
 	end
 
+	RefreshSales()
+
 	SetMoney("today", L.Income(L.History(0)))
 	SetMoney("week", L.Income(L.History(6)))
 	SetMoney("month", L.Income(L.History(29)))
@@ -205,7 +238,7 @@ function L.RequestRefresh()
 end
 
 ---------------------------------------------------------------------------
--- PredUI minimap button (Minimap.lua): tooltip lines and right-click
+-- PredUI minimap and floating buttons: tooltip lines and right-click
 ---------------------------------------------------------------------------
 
 function L.MinimapTooltip()
@@ -219,11 +252,38 @@ function L.MinimapTooltip()
 	if inbox then
 		GameTooltip:AddDoubleLine("Gold in the mailbox", L.Money(inbox.money), 1, 1, 1, 1, 1, 1)
 	end
+	local sales, salesTotal = L.IncomingAuctions()
+	if #sales > 0 then
+		GameTooltip:AddDoubleLine("Auction gold on its way", L.Money(salesTotal) .. " (next " .. L.SaleWhen(sales[1]) .. ")", 1, 1, 1, 1, 1, 1)
+	end
+
+	-- Gold of every character on this realm, richest first (saved at their
+	-- last login or money change).
+	L.char.gold = ns.PublicNumber(GetMoney()) or L.char.gold
+	local characters, total = L.RealmCharacters(), 0
+	GameTooltip:AddLine(" ")
+	GameTooltip:AddLine("Gold on " .. ns.RealmLabel(L.char.realm), 1, 0.82, 0)
+	for _, char in ipairs(characters) do
+		total = total + (char.gold or 0)
+		local _, coming = L.IncomingAuctions(char)
+		local right = L.Money(char.gold)
+		if coming > 0 then right = right .. DIM .. " +" .. L.Money(coming) .. " sold|r" end
+		GameTooltip:AddDoubleLine(L.ColoredName(char), right, 1, 1, 1, 1, 1, 1)
+	end
+	if #characters > 1 then
+		GameTooltip:AddDoubleLine("Total", L.Money(total), 1, 0.82, 0, 1, 1, 1)
+	end
 end
 
 function L.MinimapRightClick()
 	if panel then L.TogglePanel() end
 end
+
+L.launcher = L.launcher or {}
+table.insert(L.launcher, 1, {
+	icon = "Interface\\Icons\\INV_Letter_15", label = "Mail Ledger", hint = "Gold and items from the mailbox (/mledger).",
+	func = function() if panel then L.TogglePanel() end end,
+})
 
 ---------------------------------------------------------------------------
 -- Panel
@@ -275,6 +335,10 @@ function L.BuildUI()
 		end,
 	})
 	panel:SetScript("OnShow", Refresh)
+	-- Keeps the sale countdowns moving while the panel is open.
+	C_Timer.NewTicker(30, function()
+		if panel:IsShown() then Refresh() end
+	end)
 
 	cursorY = -S.TITLE_H - 8
 	local totalLabel = S.Text(panel, 11)
@@ -299,10 +363,20 @@ function L.BuildUI()
 
 	AddHeading("Still in the mailbox")
 	AddRow("waiting", "Gold to collect (listed mail)")
-	AddRow("ahPending", "Auction gold on its way")
+	AddRow("ahPending", "Pending invoices")
 	AddRow("codDue", "COD you would owe")
 	AddRow("mailCount", "Mails")
 	AddRow("expires", "Next expiry")
+
+	AddHeading("Sold, mail on its way")
+	for i = 1, SALE_ROWS do
+		AddRow("sale" .. i, "")
+		labels["sale" .. i]:SetWidth(SALE_NAME_WIDTH)
+		labels["sale" .. i]:SetJustifyH("LEFT")
+		labels["sale" .. i]:SetWordWrap(false)
+	end
+	AddRow("saleMore", "")
+	AddRow("saleTotal", "Total after AH cut")
 
 	AddHeading("Mail income")
 	AddRow("today", "Today")

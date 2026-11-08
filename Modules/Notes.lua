@@ -3,8 +3,8 @@
 --
 --   * /notes opens the list of notes. Click one to open it, right-click to
 --     delete it. "New note" adds one.
---   * A floating note button (can be turned off in the settings) opens the
---     list too; right-click it for a new note, drag it to move it.
+--   * The Notes icon on the PredUI floating button (Launcher.lua) opens the
+--     list too; right-click it for a new note, shift-right-click for a list.
 --   * A note is a small paper window: title at the top, text below (saved as
 --     you type). New notes belong to the character that wrote them (other
 --     characters don't see them); untick "Only on <name>" under Areas to share
@@ -41,7 +41,7 @@ local S = ns.Style
 local M = ns.NewModule("notes", {
 	title = "Notes",
 	notes = "Post-it notes for reminders: a list of notes, pin one to keep it on screen, or have it open when you enter a zone or a capital city.",
-	defaults = { popup = true, sound = true, button = true, charOnly = true, opacity = 100, chatTags = true },
+	defaults = { popup = true, sound = true, charOnly = true, opacity = 100, chatTags = true },
 })
 
 local NOTE_W, NOTE_H = 260, 210
@@ -70,16 +70,12 @@ local CAPITAL_NAMES = {
 	["Silvermoon City"] = true, ["Shattrath City"] = true,
 }
 
-local BUTTON_ICON = "Interface\\Icons\\INV_Misc_Note_01"
-local BUTTON_POINT = { "RIGHT", "RIGHT", -60, 120 }
-
 local db
-local floatButton
 local frames = {}              -- [id] = note window
 local freeFrames = {}
 local listFrame, areaPanel
 local lastMatch = {}           -- [id] = true while you're in one of the note's areas
-local RefreshList, RefreshAreaPanel, OpenNote, UpdateFloatButton, RefreshItems, ApplyMode, RefreshView
+local RefreshList, RefreshAreaPanel, OpenNote, RefreshItems, ApplyMode, RefreshView
 
 --------------------------------------------------------------------------------
 -- Data
@@ -191,7 +187,6 @@ end
 local function Touch(note)
 	note.updated = time()
 	if listFrame and listFrame:IsShown() then RefreshList() end
-	UpdateFloatButton()
 end
 
 --------------------------------------------------------------------------------
@@ -1568,7 +1563,6 @@ function M.Delete(id)
 	db.list[id] = nil
 	lastMatch[id] = nil
 	if listFrame and listFrame:IsShown() then RefreshList() end
-	UpdateFloatButton()
 end
 
 --------------------------------------------------------------------------------
@@ -1907,70 +1901,6 @@ local function BuildList()
 end
 
 --------------------------------------------------------------------------------
--- Floating button: click opens the list, right-click starts a new note.
---------------------------------------------------------------------------------
-
-local function BuildFloatButton()
-	local b = CreateFrame("Button", "PredUINotesButton", UIParent)
-	b:SetSize(32, 32)
-	b:SetFrameStrata("MEDIUM")
-	b:SetClampedToScreen(true)
-	b:SetMovable(true)
-	if b.SetDontSavePosition then b:SetDontSavePosition(true) end   -- saved in our db
-	b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-	b:RegisterForDrag("LeftButton")
-	S.Body(b, { 0, 0, 0, 1 })
-	b.glow = S.Glow(b, 14, 2)
-	local icon = b:CreateTexture(nil, "ARTWORK")
-	icon:SetPoint("TOPLEFT", 1, -1)
-	icon:SetPoint("BOTTOMRIGHT", -1, 1)
-	icon:SetTexture(BUTTON_ICON)
-	icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-	local hl = b:CreateTexture(nil, "HIGHLIGHT")
-	hl:SetAllPoints(icon)
-	hl:SetColorTexture(1, 1, 1, 0.15)
-	b.count = b:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
-	b.count:SetPoint("BOTTOMRIGHT", 0, 1)
-
-	b:SetScript("OnClick", function(_, button)
-		if button == "RightButton" then
-			if IsShiftKeyDown() then M.New(nil, "list") else M.New() end
-		else
-			M.ToggleList()
-		end
-	end)
-	b:SetScript("OnDragStart", function(self)
-		GameTooltip_Hide()
-		self:StartMoving()
-	end)
-	b:SetScript("OnDragStop", function(self)
-		self:StopMovingOrSizing()
-		S.SavePoint(self, db, "buttonPoint")
-	end)
-	b:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-		GameTooltip:SetText("Notes")
-		GameTooltip:AddLine(("%d note(s)"):format(#SortedNotes()), 1, 1, 1)
-		GameTooltip:AddLine("Click: list. Right-click: new note.", 0.5, 0.5, 0.5)
-		GameTooltip:AddLine("Shift-right-click: new checklist.", 0.5, 0.5, 0.5)
-		GameTooltip:AddLine("Drag to move. Hide it in /notes options.", 0.5, 0.5, 0.5)
-		GameTooltip:Show()
-	end)
-	b:SetScript("OnLeave", GameTooltip_Hide)
-
-	S.RestorePoint(b, db, "buttonPoint", BUTTON_POINT)
-	S.Scaled(b)
-	floatButton = b
-end
-
-UpdateFloatButton = function()
-	if not floatButton then return end
-	floatButton:SetShown(db.button and true or false)
-	local n = #SortedNotes()
-	floatButton.count:SetText(n > 0 and n or "")
-end
-
---------------------------------------------------------------------------------
 -- Commands
 --------------------------------------------------------------------------------
 
@@ -1989,7 +1919,6 @@ function M.New(text, kind)
 	local note = NewNote(text, kind)
 	local f = OpenNote(note.id)
 	if listFrame:IsShown() then RefreshList() end
-	UpdateFloatButton()
 	if kind == "list" then
 		if #note.items > 0 then f.addBox:SetFocus() else f.titleBox:SetFocus() end
 	elseif text and text ~= "" then
@@ -2000,10 +1929,114 @@ function M.New(text, kind)
 	return note
 end
 
+-- Plain text for the title box, which can't show coin icons: "3g 20s".
+local function PlainMoney(copper)
+	copper = math.floor(copper + 0.5)
+	local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
+	if g > 0 then return s > 0 and ("%dg %ds"):format(g, s) or g .. "g" end
+	if s > 0 then return c > 0 and ("%ds %dc"):format(s, c) or s .. "s" end
+	return c .. "c"
+end
+
+-- "12 x #[Copper Ore]" -> 12, "Copper Ore"; nil for lines you typed yourself.
+local function ParseShoppingLine(item)
+	local qty, name = item.text:match("^(%d+) x #%[(.+)%]$")
+	if qty then return tonumber(qty), name end
+end
+
+-- Puts the remaining total in the title and redraws the note if it's open.
+local function RefreshShoppingNote(note, priceOf)
+	local total = 0
+	for _, item in ipairs(note.items) do
+		local qty, name = ParseShoppingLine(item)
+		local id = qty and note.tags["i:" .. name]
+		local price = id and not item.done and priceOf(id)
+		if price then total = total + price * qty end
+	end
+	note.title = total > 0 and ("Shopping list (~%s)"):format(PlainMoney(total)) or "Shopping list"
+	note.updated = time()
+	local f = frames[note.id]
+	if f then
+		f.titleBox:SetText(note.title)
+		f.titleHint:Hide()
+		ApplyPin(f)
+		RefreshItems(f)
+		UpdateScrollBar(f)
+	end
+end
+
+-- The shopping list's lines as { id, name, qty, done }, or nil if the note is gone.
+function ns.GetShoppingList(noteID)
+	local note = db and noteID and db.list[noteID]
+	if not (note and IsList(note) and Visible(note) and type(note.tags) == "table") then return end
+	local lines = {}
+	for _, item in ipairs(note.items) do
+		local qty, name = ParseShoppingLine(item)
+		local id = qty and note.tags["i:" .. name]
+		if id then
+			lines[#lines + 1] = { id = id, name = name, qty = qty, done = item.done and true or false }
+		end
+	end
+	return lines
+end
+
+-- Takes `amount` off a line; at 0 the line is ticked and marked as bought.
+function ns.ReduceShoppingLine(noteID, itemID, amount, priceOf)
+	local note = db and noteID and db.list[noteID]
+	if not (note and IsList(note) and type(note.tags) == "table") then return end
+	for _, item in ipairs(note.items) do
+		local qty, name = ParseShoppingLine(item)
+		if qty and note.tags["i:" .. name] == itemID and not item.done then
+			local left = qty - amount
+			if left > 0 then
+				item.text = ("%d x #[%s]"):format(left, name)
+			else
+				item.done, item.bought = true, true
+			end
+			RefreshShoppingNote(note, priceOf)
+			return
+		end
+	end
+end
+
+-- For Craft Cost: adds { id, name, qty } lines to the shopping list note, raising
+-- the quantity of a line that's already there. priceOf(itemID) prices the total
+-- in the title. Makes a new note if noteID is gone. Returns the note's ID.
+function ns.AddToShoppingList(noteID, wanted, priceOf)
+	local note = noteID and db.list[noteID]
+	if not (note and IsList(note) and Visible(note)) then
+		note = NewNote("", "list")
+	end
+	note.tags = type(note.tags) == "table" and note.tags or {}
+	local byName = {}
+	for _, item in ipairs(note.items) do
+		local qty, name = ParseShoppingLine(item)
+		if qty then byName[name] = { item = item, qty = qty } end
+	end
+	for _, w in ipairs(wanted) do
+		note.tags["i:" .. w.name] = w.id
+		local line = byName[w.name]
+		if line then
+			-- A line that was all bought starts again; its old amount is done with.
+			line.qty = line.item.bought and w.qty or line.qty + w.qty
+			line.item.text = ("%d x #[%s]"):format(line.qty, w.name)
+			line.item.done, line.item.bought = nil, nil
+		else
+			local item = { text = ("%d x #[%s]"):format(w.qty, w.name) }
+			note.items[#note.items + 1] = item
+			byName[w.name] = { item = item, qty = w.qty }
+		end
+	end
+
+	note.pinned = true
+	RefreshShoppingNote(note, priceOf)
+	OpenNote(note.id)
+	if listFrame:IsShown() then RefreshList() end
+	return note.id
+end
+
 function M.ResetPosition()
 	db.listPoint = nil
-	db.buttonPoint = nil
-	S.RestorePoint(floatButton, db, "buttonPoint", BUTTON_POINT)
 	listFrame:ClearAllPoints()
 	listFrame:SetPoint("CENTER")
 	local n = 0
@@ -2017,6 +2050,14 @@ function M.ResetPosition()
 		end
 	end
 end
+
+M.launcher = {
+	{ icon = "Interface\\Icons\\INV_Misc_Note_01", label = "Notes",
+		hint = "Click: your notes. Right-click: new note. Shift-right-click: new checklist.",
+		func = function() M.ToggleList() end,
+		rightClick = function() if IsShiftKeyDown() then M.New(nil, "list") else M.New() end end,
+		count = function() return #SortedNotes() end },
+}
 
 function M.MinimapTooltip()
 	local n = #SortedNotes()
@@ -2047,17 +2088,13 @@ local function OnSlash(msg)
 		else
 			M.Say(("usage: /notes opacity 10-100, now %d%%."):format(db.opacity))
 		end
-	elseif cmd == "button" then
-		db.button = not db.button
-		UpdateFloatButton()
-		M.Say("floating button " .. (db.button and "on" or "off") .. ".")
 	elseif cmd == "reset" then
 		M.ResetPosition()
 		M.Say("windows moved back to the middle of the screen.")
 	elseif cmd == "options" then
 		ns.OpenSettings(M)
 	else
-		M.Say("/notes - list, /notes new [text], /notes newlist [milk, eggs], /notes where, /notes test, /notes opacity N, /notes button, /notes reset, /notes options")
+		M.Say("/notes - list, /notes new [text], /notes newlist [milk, eggs], /notes where, /notes test, /notes opacity N, /notes reset, /notes options")
 	end
 end
 
@@ -2071,9 +2108,6 @@ M.options = {
 		onChange = function(v) M.SetOpacity(v) end },
 	{ type = "checkbox", key = "charOnly", label = "New notes: this character only",
 		tooltip = "New notes are only seen by the character that wrote them. Untick to share new notes with all your characters. Each note can still be changed under Areas." },
-	{ type = "checkbox", key = "button", label = "Floating button",
-		tooltip = "A small note button you can drag anywhere. Click opens the list, right-click starts a new note.",
-		onChange = function() UpdateFloatButton() end },
 	{ type = "checkbox", key = "popup", label = "Open notes in their areas",
 		tooltip = "Notes with a zone or capital city open by themselves when you arrive there." },
 	{ type = "checkbox", key = "sound", label = "Sound when a note opens",
@@ -2101,8 +2135,6 @@ function M:Enable()
 		end
 	end
 	BuildList()
-	BuildFloatButton()
-	UpdateFloatButton()
 
 	-- Tags: links held back by combat, item data arriving, new prices.
 	local redraw
@@ -2150,7 +2182,6 @@ function M:Enable()
 			for id, note in pairs(db.list) do
 				if note.pinned and Visible(note) then OpenNote(id) end
 			end
-			UpdateFloatButton()     -- the character name is known by now
 		end
 		-- Zone names can lag a moment behind the event.
 		C_Timer.After(0.5, function() CheckAreas(false) end)

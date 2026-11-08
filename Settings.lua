@@ -136,6 +136,12 @@ local function BuildMainPage()
 		function(value) ns.SetMinimapButtonShown(value) end)
 	Settings.CreateCheckbox(category, minimap, "The PredUI button on the minimap. Left-click opens these settings, right-click the Mail Ledger panel.")
 
+	local launcher = Settings.RegisterProxySetting(category, Variable(nil, "launcher"), Settings.VarType.Boolean,
+		"Floating button", true,
+		function() return ns.global.launcher and true or false end,
+		function(value) ns.SetLauncherShown(value) end)
+	Settings.CreateCheckbox(category, launcher, "A PredUI button you can drag anywhere. Click it for a row of icons that open the PredUI windows (Notes, Loot Room, Mail Ledger...). Right-click opens these settings.")
+
 	AddHeader(layout, "Reload")
 	AddButton(layout, "Apply module changes", "Reload UI", "Reloads the interface.", function() ReloadUI() end)
 
@@ -177,13 +183,14 @@ local function PrintHelp()
 	ns.Print("our addons in one. /predui opens the settings. Modules and their commands:")
 	local commands = {
 		flight = "/flighttimer", craft = "/crafttimer", bag = "/bagvalue", icon = "/iconsearch",
-		loot = "/lootroom", mail = "/mledger", cvars = "/hiddensettings", paladin = "/palbuffs", bankalt = "/bankalt", notes = "/notes", partyloc = "/partyloc",
+		loot = "/lootroom", mail = "/mledger", cvars = "/hiddensettings", paladin = "/palbuffs", bankalt = "/bankalt", notes = "/notes", partyloc = "/partyloc", invwhisper = "/invwhisper", swing = "/swingtimer",
 	}
 	for _, M in ipairs(ns.modules) do
 		local state = M.enabled and "|cff40ff40on|r" or (ns.IsEnabled(M.key) and "|cffff8040on after reload|r" or "|cff808080off|r")
 		print(("  %s (%s) - %s"):format(M.title, state, commands[M.key] or ""))
 	end
 	print("  /predui minimap - show or hide the minimap button")
+	print("  /predui button - show or hide the floating button")
 	print("  /predui reset - put every bar and window back in its default place")
 end
 
@@ -194,7 +201,10 @@ SlashCmdList.PREDUI = function(msg)
 		ns.OpenSettings()
 	elseif msg == "minimap" then
 		ns.ToggleMinimapButton()
+	elseif msg == "button" then
+		ns.ToggleLauncher()
 	elseif msg == "reset" then
+		ns.ResetLauncherPosition()
 		for _, M in ipairs(ns.modules) do
 			if M.enabled and M.ResetPosition then M.ResetPosition() end
 		end

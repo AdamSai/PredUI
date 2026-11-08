@@ -427,6 +427,12 @@ function L.ToggleSendList()
 	end
 end
 
+L.launcher = L.launcher or {}
+L.launcher[#L.launcher + 1] = {
+	icon = "Interface\\Icons\\INV_Crate_04", label = "Worth sending", hint = "Items in your bags worth mailing to another character.",
+	func = L.ToggleSendList,
+}
+
 function L.ResetSendListPosition()
 	L.db.settings.listPosition = nil
 	if panel and panel:IsShown() then ApplyPosition() end

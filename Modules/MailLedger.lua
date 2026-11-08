@@ -3,6 +3,7 @@
 --
 -- This file: mail classification, accounting, saved data and events.
 -- MailLedgerUI.lua: the panel beside the mailbox, and its PredUI minimap button lines.
+-- MailLedgerAH.lua: sold auctions whose gold hasn't reached the mailbox yet.
 -- MailSubject.lua: fills in the subject of money-only mail.
 -- MailSend.lua: opens on Send Mail, addressed to your default alt.
 -- MailSendList.lua: the "Worth sending" list left of the mailbox.
@@ -37,6 +38,7 @@ L.DEFAULT_SETTINGS = {
 	sendList = true,     -- show the "Worth sending" list with the mailbox
 	closeWithMail = true, -- hide the ledger and the list when the mailbox closes
 	listSort = "value",  -- sort that list by "value" (stack gold) or "percent" (over vendor)
+	saleChat = true,     -- a chat line when an auction sells
 	-- sendTo = { [realm] = "Alt" }: the default recipient, set per realm
 }
 
@@ -134,6 +136,8 @@ local function InitCharacter()
 	char.class = select(2, UnitClass("player"))
 	char.days = char.days or {}
 	char.log = char.log or {}
+	char.listings = char.listings or {}  -- your AH listings, for sale prices
+	char.incoming = char.incoming or {}  -- sold auctions, mail on its way
 	char.gold = GetMoney()
 	L.char = char
 end
@@ -163,6 +167,12 @@ function L.FullName(char)
 		return char.name .. L.SURNAME_SEPARATOR .. char.surname
 	end
 	return char.name
+end
+
+-- The first name in the character's class colour.
+function L.ColoredName(char)
+	local color = char.class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[char.class]
+	return color and color.colorStr and ("|c" .. color.colorStr .. char.name .. "|r") or char.name
 end
 
 -- Characters on the current realm, richest first.
@@ -296,6 +306,7 @@ local function ReadMail(index)
 		mail.count = invoiceCount
 		mail.who = invoicePlayer or sender
 		mail.fee = consignment or 0
+		if invoiceType == "seller" then L.LearnAHCut(bid, consignment) end
 	elseif invoiceType == "seller_temp_invoice" then
 		mail.category = "sale"
 		mail.item = invoiceItem
@@ -503,6 +514,7 @@ local function ScanInbox()
 		end
 	end
 	L.char.inbox = inbox
+	L.ClearArrivedSales()
 	L.RequestRefresh()
 end
 
@@ -540,7 +552,7 @@ end
 
 function L.PrintAlts()
 	local totalGold, totalWaiting = 0, 0
-	L.Print("characters on " .. GetRealmName() .. ":")
+	L.Print("characters on " .. ns.RealmLabel() .. ":")
 	for _, char in ipairs(L.RealmCharacters()) do
 		local inbox = char.inbox
 		local line = "  " .. char.name .. ": " .. L.Money(char.gold)
@@ -654,6 +666,26 @@ function handlers.PLAYER_MONEY()
 	L.RequestRefresh()
 end
 
+function handlers.AUCTION_HOUSE_SHOW()
+	L.OnAuctionHouseShow()
+end
+
+function handlers.AUCTION_HOUSE_AUCTION_CREATED()
+	L.OnAuctionCreated()
+end
+
+function handlers.OWNED_AUCTIONS_UPDATED()
+	L.OnOwnedAuctionsUpdated()
+end
+
+function handlers.AUCTION_CANCELED(auctionID)
+	L.OnAuctionCanceled(auctionID)
+end
+
+function handlers.AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION(notification, text, auctionID)
+	L.OnAuctionNotification(notification, text, auctionID)
+end
+
 function handlers.MAIL_SEND_SUCCESS()
 	L.OnMailSentRefill()
 	if not pendingSend then return end
@@ -702,9 +734,9 @@ local function SetSendTo(name)
 	L.SetSendTarget(name)
 	local target = L.SendTargetSetting()
 	if target then
-		L.Print("default recipient on " .. GetRealmName() .. ": " .. target .. ".")
+		L.Print("default recipient on " .. ns.RealmLabel() .. ": " .. target .. ".")
 	else
-		L.Print("no default recipient on " .. GetRealmName() .. ".")
+		L.Print("no default recipient on " .. ns.RealmLabel() .. ".")
 	end
 end
 
@@ -735,6 +767,14 @@ local function OnSlash(input)
 		SetSendTo(rest)
 	elseif command == "subject" then
 		ToggleSetting("autoSubject", "subject autofill")
+	elseif command == "sales" then
+		L.PrintSales()
+	elseif command == "salechat" then
+		ToggleSetting("saleChat", "chat line on sale")
+	elseif command == "testsale" then
+		L.TestSale()
+	elseif command == "clearsales" then
+		L.ClearSales()
 	elseif command == "resetpos" then
 		L.ResetPosition()
 		L.ResetSendListPosition()
@@ -745,6 +785,10 @@ local function OnSlash(input)
 		L.Print("/mledger: show or hide the panel")
 		print("  /mledger history: income today, 7 days, 30 days, all time")
 		print("  /mledger alts: gold and waiting mail on every character on this realm")
+		print("  /mledger sales: sold auctions whose mail is on its way, all characters on this realm")
+		print("  /mledger salechat: toggle the chat line when an auction sells")
+		print("  /mledger testsale: add a test sale to preview the list")
+		print("  /mledger clearsales: empty this character's sold-auction list")
 		print("  /mledger chat: toggle the summary when you leave the mailbox")
 		print("  /mledger auto: toggle opening the panel with the mailbox")
 		print("  /mledger list: show or hide the worth-sending list")
@@ -776,6 +820,7 @@ end
 L.options = {
 	SettingOption("checkbox", "autoShow", "Open with the mailbox", "Show the panel whenever you open a mailbox."),
 	SettingOption("checkbox", "closeWithMail", "Close with the mailbox", "Close the Mail Ledger panel and the worth-sending list when you close the mailbox. Off: they stay open until you close them."),
+	SettingOption("checkbox", "saleChat", "Chat line on sale", "When an auction sells, print what sold, for how much (after the AH cut) and that its mail lands in 60 minutes."),
 	SettingOption("checkbox", "chatSummary", "Chat summary", "Print what you looted when you leave the mailbox."),
 	SettingOption("checkbox", "autoSubject", "Fill money-only subjects", "When a mail only carries gold, put the amount in the subject."),
 	SettingOption("checkbox", "openSend", "Open on Send Mail", "Open the mailbox on the Send Mail tab instead of the Inbox. Not on the default recipient itself, which is the one collecting."),
@@ -794,6 +839,7 @@ L.options = {
 	{ type = "button", label = "Panel", button = "Show / hide", tooltip = "Show or hide the Mail Ledger panel.", func = function() L.TogglePanel() end },
 	{ type = "button", label = "Panel position", button = "Re-attach", tooltip = "Put the panel back beside the mailbox after dragging it.", func = function() L.ResetPosition() end },
 	{ type = "button", label = "Reports", button = "Income history", tooltip = "Print income for today, 7 days, 30 days and all time.", func = function() L.PrintHistory() end },
+	{ type = "button", label = "", button = "Sold auctions", tooltip = "Print the sold auctions whose mail is on its way.", func = function() L.PrintSales() end },
 	{ type = "button", label = "", button = "Alts on realm", tooltip = "Print gold and waiting mail for every character on this realm.", func = function() L.PrintAlts() end },
 }
 

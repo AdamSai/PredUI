@@ -41,6 +41,19 @@ function ns.PublicString(v)
 	return ns.Public(v) and type(v) == "string" and v ~= "" and v or nil
 end
 
+-- The realm as shown to the player: just its ruleset when the name ends in one
+-- ("CAMWOW EU5 Realm 3 PvE" -> "PvE"), else the whole name. Only for display;
+-- saved data stays keyed by the full GetRealmName().
+local RULESETS = { pve = true, pvp = true, rp = true, rppvp = true, ["rp-pvp"] = true, hardcore = true }
+
+function ns.RealmLabel(realm)
+	realm = ns.PublicString(realm or GetRealmName())
+	if not realm then return "this realm" end
+	local last = realm:match("(%S+)%s*$")
+	if last and RULESETS[last:lower()] then return last end
+	return realm
+end
+
 -- A call that's allowed to be missing or to fail; the caller copes with nil.
 function ns.Try(fn, ...)
 	if type(fn) ~= "function" then return nil end
@@ -167,6 +180,7 @@ local GLOBAL_DEFAULTS = {
 	scale = 1,                 -- scale of every PredUI window and bar
 	glow = true,               -- soft glow around windows and bars
 	minimap = true,            -- show the minimap button (Minimap.lua)
+	launcher = true,           -- show the floating button (Launcher.lua)
 }
 
 local function Init()
@@ -195,6 +209,7 @@ local function Init()
 	ns.Style.ApplyGlobal()
 	if ns.RegisterSettings then ns.RegisterSettings() end
 	if ns.BuildMinimapButton then ns.BuildMinimapButton() end
+	if ns.BuildLauncher then ns.BuildLauncher() end
 end
 
 local events = CreateFrame("Frame")
