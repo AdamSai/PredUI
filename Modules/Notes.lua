@@ -11,6 +11,16 @@
 --     one, or change the default in the settings.
 --   * Checklists: "List" on a note turns its lines into items you can tick
 --     off (shopping lists...), and back into text. "New list" starts one.
+--   * Tags: in a note or list item, @ picks a quest and # picks an item. They
+--     are typed as [Quest Name] and #[Item Name] (the ID is saved in note.tags).
+--     Edit boxes can't hold clickable links, so while you aren't editing, text
+--     with tags is drawn by a read view on top of the box. Quests are shown in
+--     amber with a "!", items with their icon, quality and Auctionator price.
+--     Click a quest: opens it in the quest log, or if it isn't there sets a
+--     waypoint where it starts (needs Questie). Click an item: its tooltip.
+--     Backspace or Delete on a tag removes all of it.
+--   * SetHyperlinksEnabled is protected, so a note first made in combat gets
+--     its links after combat.
 --   * Pin: a pinned note has no close button and opens again after a login or
 --     reload, so it stays on screen until you un-pin it.
 --   * Areas: a note can open by itself when you enter a zone or subzone you
@@ -65,7 +75,7 @@ local frames = {}              -- [id] = note window
 local freeFrames = {}
 local listFrame, areaPanel
 local lastMatch = {}           -- [id] = true while you're in one of the note's areas
-local RefreshList, RefreshAreaPanel, OpenNote, UpdateFloatButton, RefreshItems, ApplyMode
+local RefreshList, RefreshAreaPanel, OpenNote, UpdateFloatButton, RefreshItems, ApplyMode, RefreshView
 
 --------------------------------------------------------------------------------
 -- Data
@@ -141,6 +151,11 @@ local function NewNote(text, kind)
 	return note
 end
 
+-- Note text for places that don't draw tags: an item tag loses its "#".
+local function Plain(text)
+	return (text:gsub("#%[", "["))
+end
+
 local function Label(note)
 	if note.title ~= "" then return note.title end
 	local first
@@ -149,7 +164,7 @@ local function Label(note)
 	else
 		first = note.text:match("^%s*([^\n]+)")
 	end
-	return first or "(empty)"
+	return first and Plain(first) or "(empty)"
 end
 
 -- Visible notes, pinned first, then the latest edited.
@@ -288,7 +303,676 @@ local function UpdateScrollBar(f)
 	f.bar:SetValue(math.min(range, math.floor((f.scroll:GetVerticalScroll() or 0) + 0.5)))
 end
 
+--------------------------------------------------------------------------------
+-- Tags: @ and part of a quest name, or # and part of an item name; pick one
+-- (Tab, Enter or a click). Quests in your log and items in your bags come
+-- first. After that QuestieDB's quests and items, and the items Auctionator
+-- has prices for if the client knows their names. Those lists are read once,
+-- a few hundred per frame, the first time you need them.
+--------------------------------------------------------------------------------
+
+local TAG_ROWS, TAG_ROW_H, TAG_W = 8, 18, 250
+local Tag = { sel = 1, results = {}, kind = "quest" }
+local nameLists = {}            -- [kind] = sorted { { name, lower, id, level, kind }, ... }
+local nameToID = {}             -- [kind] = { [name] = id }
+local loadingNames = {}         -- [kind] = true while reading
+
+local function QuestieEntity(which)
+	local lib = _G.LibQuestieDB
+	local entity = type(lib) == "table" and lib[which]
+	if type(entity) == "table" and type(entity.Get) == "function" and type(entity.GetAllIds) == "function" then
+		return entity
+	end
+end
+
+local function NameIDs(kind)
+	local ids, seen = {}, {}
+	local entity = QuestieEntity(kind == "quest" and "Quest" or "Item")
+	local all = entity and ns.Try(entity.GetAllIds)
+	if type(all) == "table" then
+		for _, id in ipairs(all) do
+			ids[#ids + 1] = id
+			seen[id] = true
+		end
+	end
+	local auctionator = kind == "item" and _G.Auctionator
+	local prices = auctionator and auctionator.Database and auctionator.Database.db
+	if type(prices) == "table" then
+		pcall(function()
+			for key in pairs(prices) do
+				-- Plain number keys are mats and other stackables; gear has "g:" keys.
+				local id = type(key) == "string" and tonumber(key:match("^(%d+)$"))
+				if id and not seen[id] then
+					ids[#ids + 1] = id
+					seen[id] = true
+				end
+			end
+		end)
+	end
+	return ids, entity
+end
+
+local function ReadName(kind, entity, id)
+	local name = entity and ns.Try(entity.Get, id, "name")
+	if type(name) == "string" and name ~= "" then return name end
+	if kind == "item" and ns.Try(C_Item.IsItemDataCachedByID, id) then
+		return ns.PublicString(ns.Try(C_Item.GetItemNameByID, id))
+	end
+end
+
+local function LoadNames(kind)
+	if nameLists[kind] or loadingNames[kind] then return end
+	local ids, entity = NameIDs(kind)
+	loadingNames[kind] = true
+	local list, map, i = {}, {}, 1
+	local function Step()
+		local last = math.min(#ids, i + 299)
+		for n = i, last do
+			local id = ids[n]
+			local name = ReadName(kind, entity, id)
+			if name and not map[name] then
+				map[name] = id
+				local level = kind == "quest" and entity and ns.Try(entity.Get, id, "questLevel")
+				list[#list + 1] = { name = name, lower = name:lower(), id = id, level = tonumber(level), kind = kind }
+			end
+		end
+		i = last + 1
+		if i <= #ids then
+			C_Timer.After(0, Step)
+			return
+		end
+		table.sort(list, function(a, b) return a.lower < b.lower end)
+		nameLists[kind], nameToID[kind], loadingNames[kind] = list, map, nil
+		if Tag.Owns(Tag.box) and Tag.kind == kind then Tag.Search() end
+	end
+	Step()
+end
+
+-- Quests in the log (not headers or hidden ones).
+local function LogQuests()
+	local out = {}
+	local log = C_QuestLog
+	if not (log and log.GetNumQuestLogEntries and log.GetInfo) then return out end
+	for i = 1, ns.Try(log.GetNumQuestLogEntries) or 0 do
+		local info = ns.Try(log.GetInfo, i)
+		local title = info and not info.isHeader and not info.isHidden and ns.PublicString(info.title)
+		if title then
+			out[#out + 1] = { name = title, lower = title:lower(), id = ns.PublicNumber(info.questID),
+				level = ns.PublicNumber(info.level), inLog = true, kind = "quest" }
+		end
+	end
+	return out
+end
+
+-- Items in the backpack and bags, one row per item.
+local function BagItems()
+	local out, seen = {}, {}
+	for bag = 0, NUM_BAG_SLOTS or 4 do
+		for slot = 1, ns.Try(C_Container.GetContainerNumSlots, bag) or 0 do
+			local info = ns.Try(C_Container.GetContainerItemInfo, bag, slot)
+			local id = info and ns.PublicNumber(info.itemID)
+			local name = info and ns.PublicString(info.itemName)
+			if id and name and not seen[id] then
+				seen[id] = true
+				out[#out + 1] = { name = name, lower = name:lower(), id = id, kind = "item" }
+			end
+		end
+	end
+	return out
+end
+
+-- Auctionator's last-scan price of an item. Grey items have none (as ns.AuctionPrice).
+local function ItemPrice(id)
+	local auctionator = _G.Auctionator
+	local api = auctionator and auctionator.API and auctionator.API.v1
+	if not (api and api.GetAuctionPriceByItemID) then return end
+	if ns.PublicNumber(ns.Try(C_Item.GetItemQualityByID, id)) == 0 then return end
+	return ns.PublicNumber(ns.Try(api.GetAuctionPriceByItemID, "PredUI", id))
+end
+
+local function PriceText(id)
+	local price = ItemPrice(id)
+	return price and ns.PublicString(ns.Try(C_CurrencyInfo.GetCoinTextureString, math.floor(price + 0.5), 12))
+end
+
+-- 1 = name starts with q, 2 = a word starts with q, 3 = q anywhere, nil = no match.
+local function Rank(lower, q)
+	if q == "" then return 1 end
+	local s = lower:find(q, 1, true)
+	if not s then return nil end
+	if s == 1 then return 1 end
+	return lower:sub(s - 1, s - 1):find("[%s%p]") and 2 or 3
+end
+
+local function BuildTagPopup()
+	local p = CreateFrame("Frame", nil, UIParent)
+	p:SetFrameStrata("DIALOG")
+	p:SetClampedToScreen(true)
+	p:SetWidth(TAG_W)
+	S.Body(p)
+	p.rows = {}
+	for i = 1, TAG_ROWS do
+		local row = CreateFrame("Button", nil, p)
+		row:SetHeight(TAG_ROW_H)
+		row:SetPoint("TOPLEFT", 4, -4 - (i - 1) * TAG_ROW_H)
+		row:SetPoint("TOPRIGHT", -4, -4 - (i - 1) * TAG_ROW_H)
+		S.RowHighlight(row)
+		row.sel = S.Texture(row, "BACKGROUND", 1)
+		row.sel:SetAllPoints()
+		row.sel:SetVertexColor(S.ACCENT[1], S.ACCENT[2], S.ACCENT[3], 0.25)
+		row.info = S.Text(row, 10)
+		row.info:SetPoint("RIGHT", -4, 0)
+		row.info:SetJustifyH("RIGHT")
+		row.info:SetTextColor(0.6, 0.6, 0.6)
+		row.name = S.Text(row, 12)
+		row.name:SetPoint("LEFT", 4, 0)
+		row.name:SetPoint("RIGHT", row.info, "LEFT", -6, 0)
+		row.name:SetJustifyH("LEFT")
+		row:SetScript("OnClick", function() Tag.Accept(i) end)
+		row:SetScript("OnEnter", function()
+			Tag.sel = i
+			Tag.Draw()
+		end)
+		p.rows[i] = row
+	end
+	p.hint = S.Text(p, 10)
+	p.hint:SetPoint("BOTTOMLEFT", 8, 6)
+	p.hint:SetTextColor(0.6, 0.6, 0.6)
+	p:EnableKeyboard(true)
+	-- A list that takes the keyboard gets the keys before the text box, so it
+	-- does the list's keys itself and passes every other key on.
+	p:SetScript("OnKeyDown", function(self, key)
+		local used = true
+		if key == "UP" or key == "DOWN" then
+			Tag.Move(key)
+		elseif (key == "ENTER" or key == "NUMPADENTER" or key == "TAB") and #Tag.results > 0 then
+			if Tag.box and Tag.box.MarkEnter then Tag.box:MarkEnter() end
+			Tag.Accept()
+		elseif key == "ESCAPE" then
+			Tag.Hide()
+		else
+			used = false
+		end
+		-- Blocked in combat, but the list doesn't take the keyboard then.
+		if not InCombatLockdown() then self:SetPropagateKeyboardInput(not used) end
+	end)
+	p:Hide()
+	Tag.popup = p
+end
+
+function Tag.Owns(box)
+	return box ~= nil and Tag.box == box and Tag.popup ~= nil and Tag.popup:IsShown()
+end
+
+-- A multi-line box uses the arrow keys for its cursor. While the list is open
+-- its box is told to ignore them (as the chat box does), so they come through
+-- to the list's own OnKeyDown.
+function Tag.TakeArrows(box)
+	if Tag.arrowBox == box then return end
+	if Tag.arrowBox then Tag.arrowBox:SetAltArrowKeyMode(false) end
+	Tag.arrowBox = box
+	if box then box:SetAltArrowKeyMode(true) end
+end
+
+function Tag.Hide()
+	if Tag.popup then Tag.popup:Hide() end
+	Tag.TakeArrows(nil)
+	Tag.box = nil
+end
+
+-- Moves the selection, wrapping round. A key press can arrive by both routes.
+function Tag.Move(key)
+	local n = #Tag.results
+	if n == 0 or (key ~= "UP" and key ~= "DOWN") then return end
+	local now = GetTime()
+	if Tag.moved == now then return end
+	Tag.moved = now
+	Tag.sel = key == "UP" and (Tag.sel - 2) % n + 1 or Tag.sel % n + 1
+	Tag.Draw()
+end
+
+function Tag.Draw()
+	local p, results = Tag.popup, Tag.results
+	for i, row in ipairs(p.rows) do
+		local r = results[i]
+		if r then
+			row.name:SetText(r.name)
+			local info
+			if r.kind == "item" then
+				info = PriceText(r.id) or ""
+			else
+				info = r.level and r.level > 0 and ("Lvl " .. r.level) or ""
+				if r.inLog then info = info .. (info ~= "" and "  " or "") .. "|cff8fd16ein log|r" end
+			end
+			row.info:SetText(info)
+			row.sel:SetShown(i == Tag.sel)
+			row:Show()
+		else
+			row:Hide()
+		end
+	end
+	local isQuest = Tag.kind == "quest"
+	if loadingNames[Tag.kind] then
+		p.hint:SetText(isQuest and "Loading quest names..." or "Loading item names...")
+	elseif #results == 0 then
+		if Tag.query == "" then
+			p.hint:SetText(isQuest and "No quests in your log." or "Type part of an item name.")
+		else
+			p.hint:SetText(isQuest and "No quests match." or "No items match.")
+		end
+	else
+		p.hint:SetText("Up/Down to choose, Tab or Enter to add")
+	end
+	p:SetHeight(8 + #results * TAG_ROW_H + 20)
+end
+
+function Tag.Search()
+	local q, results, inLog = Tag.query, {}, {}
+	local buckets = { {}, {}, {} }
+	for _, r in ipairs(Tag.kind == "quest" and LogQuests() or BagItems()) do
+		local rank = Rank(r.lower, q)
+		if rank and not inLog[r.name] then
+			inLog[r.name] = true
+			table.insert(buckets[rank], r)
+		end
+	end
+	for _, bucket in ipairs(buckets) do
+		table.sort(bucket, function(a, b) return a.lower < b.lower end)
+		for _, r in ipairs(bucket) do results[#results + 1] = r end
+	end
+	-- The long lists (sorted already), after two letters so the list means something.
+	local names = nameLists[Tag.kind]
+	if names and #q >= 2 and #results < TAG_ROWS then
+		buckets = { {}, {}, {} }
+		for _, r in ipairs(names) do
+			local rank = not inLog[r.name] and Rank(r.lower, q)
+			if rank then
+				local bucket = buckets[rank]
+				if #bucket < TAG_ROWS then bucket[#bucket + 1] = r end
+				if rank == 1 and #bucket >= TAG_ROWS then break end
+			end
+		end
+		for _, bucket in ipairs(buckets) do
+			for _, r in ipairs(bucket) do results[#results + 1] = r end
+		end
+	end
+	for i = #results, TAG_ROWS + 1, -1 do results[i] = nil end
+	Tag.results = results
+	Tag.sel = math.max(1, math.min(Tag.sel, #results))
+
+	if not Tag.popup then BuildTagPopup() end
+	local box, p = Tag.box, Tag.popup
+	Tag.Draw()
+	p:ClearAllPoints()
+	p:SetPoint("TOPLEFT", box, "TOPLEFT", math.max(0, math.min(box.tagX or 0, box:GetWidth() - 60)),
+		(box.tagY or 0) - (box.tagH or 14) - 2)
+	p:Show()
+	-- In combat keys can't be passed on, so the box keeps them: Tab and Enter
+	-- still pick, but Up and Down move the cursor.
+	local combat = InCombatLockdown()
+	p:EnableKeyboard(not combat)
+	if not combat then p:SetPropagateKeyboardInput(true) end
+	Tag.TakeArrows(not combat and box or nil)
+end
+
+-- Opens, updates or closes the list for what's just before the cursor.
+function Tag.Update(box)
+	local text = box:GetText() or ""
+	local cursor = box:GetCursorPosition() or #text
+	local before = text:sub(1, cursor)
+	local at, sign, q = before:match("()([@#])([^@#%[%]\r\n]*)$")
+	if at and at > 1 and not before:sub(at - 1, at - 1):find("%s") then at = nil end
+	if not at or #q > 50 then
+		if Tag.box == box then Tag.Hide() end
+		return
+	end
+	local kind = sign == "#" and "item" or "quest"
+	if Tag.box ~= box or Tag.kind ~= kind then Tag.sel = 1 end
+	Tag.box, Tag.start, Tag.stop, Tag.kind = box, at, cursor, kind
+	Tag.raw = text:sub(at, cursor)
+	Tag.query = q:gsub("^%s+", ""):lower()
+	LoadNames(kind)
+	Tag.Search()
+end
+
+-- Puts the picked quest in place of "@query".
+function Tag.Accept(i)
+	local box, r = Tag.box, Tag.results[i or Tag.sel]
+	if not (box and r) then
+		Tag.Hide()
+		return
+	end
+	local text = box:GetText() or ""
+	local head = text:sub(1, Tag.start - 1) .. (r.kind == "item" and "#[" or "[") .. r.name .. "]"
+	local note = box.tagFrame and box.tagFrame.note
+	if note and r.id then
+		if type(note.tags) ~= "table" then note.tags = {} end
+		note.tags[(r.kind == "item" and "i:" or "q:") .. r.name] = r.id
+	end
+	local tail = text:sub(Tag.stop + 1)
+	if not tail:find("^%s") then head = head .. " " end
+	Tag.Hide()
+	box:SetText(head .. tail)
+	box:SetCursorPosition(#head)
+	box.tagLast = head .. tail
+	if not box:HasFocus() then box:SetFocus() end
+	-- SetText doesn't count as typing, so save the way typing does.
+	local onChanged = box:GetScript("OnTextChanged")
+	if onChanged then onChanged(box, true) end
+	box.justPicked = true
+end
+
+-- If this edit only removed part of a tag, takes out the whole tag. Backspace
+-- right after picking a tag counts the space that was added with it.
+local function DeleteWholeTag(box, old, new)
+	local note = box.tagFrame and box.tagFrame.note
+	if not (note and old and #new < #old) then return end
+	local p = 0
+	while p < #new and old:byte(p + 1) == new:byte(p + 1) do p = p + 1 end
+	local count = #old - #new
+	if old:sub(p + count + 1) ~= new:sub(p + 1) then return end
+	local first, last = p + 1, p + count
+	local from, to = first, last
+	local removedSpace = count == 1 and old:sub(first, first):find("^%s") ~= nil
+	local touched = false
+	for s, hash, name, e in old:gmatch("()(#?)%[([^%[%]\r\n]+)%]()") do
+		local kind = hash == "#" and "item" or "quest"
+		local overlaps = s <= last and e - 1 >= first
+		local justPicked = box.justPicked and removedSpace and e == first
+		if (overlaps or justPicked) and Tag.IDOf(note, kind, name) then
+			touched = true
+			from, to = math.min(from, s), math.max(to, e - 1)
+		end
+	end
+	if not touched then return end
+	-- Don't leave two spaces where the tag was.
+	if old:sub(to + 1, to + 1) == " " and (from == 1 or old:sub(from - 1, from - 1):find("%s")) then
+		to = to + 1
+	end
+	local text = old:sub(1, from - 1) .. old:sub(to + 1)
+	box:SetText(text)
+	box:SetCursorPosition(from - 1)
+	return text
+end
+
+-- Call first in a box's OnTextChanged; true means the change was Enter
+-- picking a quest, and nothing else should handle it.
+function Tag.OnText(box, userInput)
+	local text = box:GetText() or ""
+	if not userInput then
+		box.tagLast = text
+		return false
+	end
+	text = DeleteWholeTag(box, box.tagLast, text) or text
+	box.tagLast = text
+	box.justPicked = nil
+	if Tag.Owns(box) and text:sub(Tag.start, Tag.stop) == Tag.raw
+		and text:sub(Tag.stop + 1, Tag.stop + 1):find("[\r\n]") then
+		Tag.stop = Tag.stop + 1          -- take the line break out with the query
+		if box.MarkEnter then box:MarkEnter() end
+		Tag.Accept()
+		return true
+	end
+	Tag.Update(box)
+	return false
+end
+
+-- Wires a text box up for @ and # tags. Call after its own scripts are set.
+local function AttachTags(box, f)
+	box.tagFrame = f
+	box:HookScript("OnCursorChanged", function(self, x, y, _, h)
+		self.tagX, self.tagY, self.tagH = x, y, h
+	end)
+	box:SetScript("OnTabPressed", function(self)
+		if Tag.Owns(self) then Tag.Accept() end
+	end)
+	box:SetScript("OnArrowPressed", function(self, key)
+		if Tag.Owns(self) then Tag.Move(key) end
+	end)
+	local escape = box:GetScript("OnEscapePressed")
+	box:SetScript("OnEscapePressed", function(self)
+		if Tag.Owns(self) then
+			Tag.Hide()
+		elseif escape then
+			escape(self)
+		end
+	end)
+	box:HookScript("OnEditFocusLost", function(self)
+		self.justPicked = nil
+		if Tag.Owns(self) and not Tag.popup:IsMouseOver() then Tag.Hide() end
+	end)
+end
+
 local LINE_H = 14              -- height of one line of item text
+
+--------------------------------------------------------------------------------
+-- Drawing tags, and what clicking them does
+--------------------------------------------------------------------------------
+
+local function Hex(r, g, b)
+	return ("%02x%02x%02x"):format(r * 255, g * 255, b * 255)
+end
+
+local INK_HEX = Hex(INK[1], INK[2], INK[3])
+local QUEST_HEX = "7a4a00"      -- amber: game's quest yellow can't be read on the paper
+local QUEST_ICON = "|TInterface\\GossipFrame\\AvailableQuestIcon:0|t"
+local waitingForItems
+
+local function ItemHex(id)
+	local quality = ns.PublicNumber(ns.Try(C_Item.GetItemQualityByID, id))
+	if not quality then
+		waitingForItems = true
+		ns.Try(C_Item.RequestLoadItemDataByID, id)
+		return INK_HEX
+	end
+	local c = quality > 1 and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[quality]
+	if not c then return INK_HEX end
+	return Hex(c.r * 0.6, c.g * 0.6, c.b * 0.6)      -- darkened for the paper
+end
+
+local function TagID(note, kind, name)
+	local id = type(note.tags) == "table" and note.tags[(kind == "quest" and "q:" or "i:") .. name]
+	if id then return id end
+	for _, r in ipairs(kind == "quest" and LogQuests() or BagItems()) do
+		if r.name == name then return r.id end
+	end
+	return nameToID[kind] and nameToID[kind][name]
+end
+
+Tag.IDOf = TagID
+
+-- The text with its tags as links. Second return: whether there were any.
+local function Render(note, text)
+	local found = false
+	local out = (text or ""):gsub("(#?)%[([^%[%]\r\n]+)%]", function(hash, name)
+		local kind = hash == "#" and "item" or "quest"
+		local id = TagID(note, kind, name)
+		if not id then return nil end
+		found = true
+		if kind == "quest" then
+			return ("|cff%s|Hquest:%d|h%s[%s]|h|r"):format(QUEST_HEX, id, QUEST_ICON, name)
+		end
+		local icon = ns.Try(C_Item.GetItemIconByID, id)
+		local price = PriceText(id)
+		return ("|cff%s|Hitem:%d|h%s[%s]|h|r%s"):format(ItemHex(id), id,
+			icon and ("|T%s:0|t"):format(icon) or "", name, price and (" " .. price) or "")
+	end)
+	return out, found
+end
+
+local function RealItemLink(id)
+	local _, link = ns.Try(C_Item.GetItemInfo, id)
+	return ns.PublicString(link)
+end
+
+local function QuestName(id)
+	local quest = QuestieEntity("Quest")
+	return ns.PublicString(ns.Try(C_QuestLog.GetTitleForQuestID, id))
+		or (quest and ns.PublicString(ns.Try(quest.Get, id, "name")))
+		or ("Quest " .. id)
+end
+
+local function InLog(id)
+	return ns.PublicNumber(ns.Try(C_QuestLog.GetLogIndexForQuestID, id)) ~= nil
+end
+
+-- Where a quest is picked up: map, x, y (0-100), the giver's name, and whether
+-- an item starts it instead. From QuestieDB's givers and spawns, using
+-- Questie's area -> map table; a spawn on the map you're on wins.
+local function QuestStart(id)
+	local quest = QuestieEntity("Quest")
+	local startedBy = quest and ns.Try(quest.Get, id, "startedBy")
+	if type(startedBy) ~= "table" then return end
+	local loader = _G.QuestieLoader
+	local zones = loader and loader.ImportModule and ns.Try(loader.ImportModule, loader, "ZoneDB")
+	local here = ns.PublicNumber(ns.Try(C_Map.GetBestMapForUnit, "player"))
+	local best
+	if zones and zones.GetUiMapIdByAreaId then
+		for i, which in ipairs({ "Npc", "Object" }) do
+			local entity = QuestieEntity(which)
+			for _, giver in ipairs(entity and type(startedBy[i]) == "table" and startedBy[i] or {}) do
+				local spawns = ns.Try(entity.Get, giver, "spawns")
+				for area, points in pairs(type(spawns) == "table" and spawns or {}) do
+					local map = ns.Try(zones.GetUiMapIdByAreaId, zones, area)
+					local p = type(points) == "table" and points[1]
+					if map and p and tonumber(p[1]) and tonumber(p[2]) and p[1] >= 0 and p[2] >= 0
+						and ns.Try(C_Map.CanSetUserWaypointOnMap, map) then
+						if not best or map == here then
+							best = { map = map, x = p[1], y = p[2], giver = ns.Try(entity.Get, giver, "name") }
+						end
+						if map == here then return best end
+					end
+				end
+			end
+		end
+	end
+	if best then return best end
+	if type(startedBy[3]) == "table" and startedBy[3][1] then return { fromItem = startedBy[3][1] } end
+end
+
+local function ShowQuestStart(id)
+	local name = QuestName(id)
+	if ns.Try(C_QuestLog.IsQuestFlaggedCompleted, id) then
+		ns.Print(("You've already done %s."):format(name))
+	end
+	local start = QuestStart(id)
+	if start and start.map then
+		ns.Try(C_Map.SetUserWaypoint, UiMapPoint.CreateFromCoordinates(start.map, start.x / 100, start.y / 100))
+		ns.Try(C_SuperTrack.SetSuperTrackedUserWaypoint, true)
+		ns.Try(OpenWorldMap, start.map)
+		ns.Print(("%s starts at %s: waypoint set."):format(name, ns.PublicString(start.giver) or "the marked spot"))
+	elseif start and start.fromItem then
+		local item = QuestieEntity("Item")
+		local itemName = item and ns.Try(item.Get, start.fromItem, "name")
+		ns.Print(("%s starts from an item: %s."):format(name, ns.PublicString(itemName) or ("item " .. start.fromItem)))
+	else
+		ns.Print(("No location known for %s (needs Questie)."):format(name))
+	end
+end
+
+local function OnLinkClick(_, link, text, button)
+	local kind, id = tostring(link):match("^(%a+):(%d+)")
+	id = tonumber(id)
+	if not id then return end
+	if kind == "quest" then
+		if InLog(id) then
+			ns.Try(QuestMapFrame_OpenToQuestDetails, id)
+		else
+			ShowQuestStart(id)
+		end
+	elseif kind == "item" then
+		local full = RealItemLink(id)
+		local payload = full and full:match("|H(item:[^|]+)|h") or ("item:" .. id)
+		ns.Try(SetItemRef, payload, full or text, button)
+	end
+end
+
+local function OnLinkEnter(self, link)
+	self.overLink = true
+	local kind, id = tostring(link):match("^(%a+):(%d+)")
+	id = tonumber(id)
+	if not id then return end
+	GameTooltip:SetOwner(self, "ANCHOR_CURSOR")
+	if kind == "item" then
+		GameTooltip:SetHyperlink("item:" .. id)
+	else
+		GameTooltip:SetText(QuestName(id), 1, 0.82, 0)
+		local quest = QuestieEntity("Quest")
+		local level = quest and tonumber(ns.Try(quest.Get, id, "questLevel"))
+		if level and level > 0 then GameTooltip:AddLine("Level " .. level, 0.9, 0.9, 0.9) end
+		GameTooltip:AddLine(InLog(id) and "In your quest log: click to open." or "Click to show where it starts.", 0.5, 0.8, 1)
+	end
+	GameTooltip:Show()
+end
+
+local pendingLinks = {}
+
+local function EnableLinks(view)
+	if InCombatLockdown() then
+		pendingLinks[view] = true
+		return
+	end
+	view:SetHyperlinksEnabled(true)
+	view.linksOn = true
+end
+
+-- A read view lying over a text box. Clicking off a link starts editing.
+local function CreateView(parent, box, width)
+	local v = CreateFrame("Frame", nil, parent)
+	v:SetPoint("TOPLEFT", box, "TOPLEFT")
+	v:SetSize(width, LINE_H)
+	v:SetFrameLevel(box:GetFrameLevel() + 2)
+	v:EnableMouse(true)
+	v.text = v:CreateFontString(nil, "OVERLAY")
+	v.text:SetFont(STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF", 12, "")
+	v.text:SetTextColor(INK[1], INK[2], INK[3])
+	v.text:SetPoint("TOPLEFT")
+	v.text:SetWidth(width)
+	v.text:SetJustifyH("LEFT")
+	v.text:SetWordWrap(true)
+	if v.text.SetNonSpaceWrap then v.text:SetNonSpaceWrap(true) end
+	EnableLinks(v)
+	v:SetScript("OnHyperlinkClick", OnLinkClick)
+	v:SetScript("OnHyperlinkEnter", OnLinkEnter)
+	v:SetScript("OnHyperlinkLeave", function(self)
+		self.overLink = nil
+		GameTooltip:Hide()
+	end)
+	v:SetScript("OnHide", function(self)
+		if self.overLink then GameTooltip:Hide() end
+		self.overLink = nil
+	end)
+	v:SetScript("OnMouseUp", function(self)
+		if self.overLink then return end
+		box:SetFocus()
+		box:SetCursorPosition(#(box:GetText() or ""))
+	end)
+	v:Hide()
+	return v
+end
+
+-- Shows the view if the text has tags and isn't being edited. True if shown.
+local function SetView(v, box, note, text, dim)
+	local out, found
+	if note and v.linksOn and not box:HasFocus() then out, found = Render(note, text) end
+	if found then
+		v.text:SetText(out)
+		v:SetHeight(math.max(LINE_H, math.ceil(v.text:GetStringHeight())))
+		v:SetAlpha(dim and 0.45 or 1)
+		v:Show()
+		box:SetAlpha(0)
+	else
+		v:Hide()
+		box:SetAlpha(1)
+	end
+	return found
+end
+
+local function UpdateTextHolder(f)
+	local h = f.edit:GetHeight() or 0
+	if f.view:IsShown() then h = math.max(h, f.view:GetHeight()) end
+	f.textChild:SetHeight(math.max(h, 1))
+end
 
 -- A borderless edit box in ink for checklist items. It's multi-line so long
 -- items wrap, but an item stays one paragraph: Enter runs onEnter instead of
@@ -310,10 +994,16 @@ local function ItemBox(parent, onEnter)
 		local now = GetTime()
 		if lastEnter == now then return end
 		lastEnter = now
+		if Tag.Owns(self) then
+			Tag.Accept()
+			return
+		end
 		onEnter(self)
 	end
 	e:SetScript("OnEnterPressed", Enter)
 	e.Enter = Enter
+	-- A quest tag picked with Enter uses up this key press.
+	function e:MarkEnter() lastEnter = GetTime() end
 	-- Called first by the boxes' own OnTextChanged: takes out a typed line
 	-- break and returns true if there was one (the caller saves, then Enters).
 	function e:StripBreaks(userInput)
@@ -340,7 +1030,8 @@ local function UpdateStrike(row, height)
 		return
 	end
 	row.measure:SetText(row.edit:GetText())
-	row.strike:SetWidth(math.max(1, math.min(ITEM_W, row.measure:GetStringWidth())))
+	local width = row.view:IsShown() and row.view.text:GetStringWidth() or row.measure:GetStringWidth()
+	row.strike:SetWidth(math.max(1, math.min(ITEM_W, width)))
 	row.strike:Show()
 end
 
@@ -371,6 +1062,7 @@ local function CreateItemRow(f)
 	row.edit = ItemBox(row, function() f.addBox:SetFocus() end)
 	row.edit:SetPoint("TOPLEFT", 20, -3)
 	row.edit:SetScript("OnTextChanged", function(self, userInput)
+		if Tag.OnText(self, userInput) then return end
 		local broke = self:StripBreaks(userInput)
 		if (userInput or broke) and row.item then
 			row.item.text = self:GetText()
@@ -406,6 +1098,10 @@ local function CreateItemRow(f)
 		Touch(f.note)
 		RefreshItems(f)
 	end)
+	AttachTags(row.edit, f)
+	row.view = CreateView(row, row.edit, ITEM_W)
+	row.edit:HookScript("OnEditFocusGained", function() RefreshItems(f) end)
+	row.edit:HookScript("OnEditFocusLost", function() RefreshItems(f) end)
 	return row
 end
 
@@ -426,6 +1122,9 @@ RefreshItems = function(f)
 		end
 		row.check.tick:SetShown(item.done and true or false)
 		local h = TextHeight(f, item.text)
+		if SetView(row.view, row.edit, f.note, item.text, item.done) then
+			h = math.max(h, row.view:GetHeight())
+		end
 		row.edit:SetHeight(h)
 		row:SetHeight(math.max(ITEM_H, h + 6))
 		UpdateStrike(row, h)
@@ -440,6 +1139,9 @@ RefreshItems = function(f)
 		row:Hide()
 	end
 	local addH = TextHeight(f, f.addBox:GetText())
+	if SetView(f.addView, f.addBox, f.note, f.addBox:GetText()) then
+		addH = math.max(addH, f.addView:GetHeight())
+	end
 	f.addBox:SetHeight(addH)
 	f.addBox:ClearAllPoints()
 	f.addBox:SetPoint("TOPLEFT", 20, y - 3)
@@ -450,17 +1152,36 @@ end
 ApplyMode = function(f)
 	local list = IsList(f.note)
 	if list and type(f.note.items) ~= "table" then f.note.items = {} end
-	f.edit:SetShown(not list)
+	f.textChild:SetShown(not list)
 	f.listChild:SetShown(list)
-	f.scroll:SetScrollChild(list and f.listChild or f.edit)
+	f.scroll:SetScrollChild(list and f.listChild or f.textChild)
 	f.scroll:SetVerticalScroll(0)
 	f.mode:SetOn(list)
 	if list then
 		RefreshItems(f)
 	else
 		f.clear:Hide()
+		RefreshView(f)
 	end
 	UpdateScrollBar(f)
+end
+
+-- Draws the note's tags again (open, edit finished, new prices or item data).
+RefreshView = function(f)
+	if not f.note then return end
+	if IsList(f.note) then
+		RefreshItems(f)
+	else
+		SetView(f.view, f.edit, f.note, f.note.text)
+		UpdateTextHolder(f)
+		UpdateScrollBar(f)
+	end
+end
+
+local function RefreshAllViews()
+	for _, f in pairs(frames) do
+		if f:IsShown() then RefreshView(f) end
+	end
 end
 
 local function CreateNoteFrame()
@@ -541,7 +1262,10 @@ local function CreateNoteFrame()
 	f.scroll = CreateFrame("ScrollFrame", nil, f)
 	f.scroll:SetPoint("TOPLEFT", S.PAD, -S.TITLE_H - 6)
 	f.scroll:SetPoint("BOTTOMRIGHT", -S.PAD - 10, 30)
-	f.edit = CreateFrame("EditBox", nil, f.scroll)
+	f.textChild = CreateFrame("Frame", nil, f.scroll)
+	f.textChild:SetSize(TEXT_W, 1)
+	f.edit = CreateFrame("EditBox", nil, f.textChild)
+	f.edit:SetPoint("TOPLEFT")
 	f.edit:SetMultiLine(true)
 	f.edit:SetAutoFocus(false)
 	f.edit:SetFont(STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF", 12, "")
@@ -549,7 +1273,11 @@ local function CreateNoteFrame()
 	f.edit:SetShadowOffset(0, 0)
 	f.edit:SetWidth(NOTE_W - S.PAD * 2 - 10)
 	f.edit:SetMaxLetters(4000)
-	f.scroll:SetScrollChild(f.edit)
+	f.scroll:SetScrollChild(f.textChild)
+	f.view = CreateView(f.textChild, f.edit, TEXT_W)
+	f.edit:SetScript("OnSizeChanged", function() UpdateTextHolder(f) end)
+	f.edit:SetScript("OnEditFocusGained", function() RefreshView(f) end)
+	f.edit:SetScript("OnEditFocusLost", function() RefreshView(f) end)
 	f.textHint = S.Text(f.edit, 12)
 	f.textHint:SetShadowOffset(0, 0)
 	f.textHint:SetPoint("TOPLEFT")
@@ -557,6 +1285,7 @@ local function CreateNoteFrame()
 	f.textHint:SetText("Write a reminder...")
 	f.edit:SetScript("OnEscapePressed", f.edit.ClearFocus)
 	f.edit:SetScript("OnTextChanged", function(self, userInput)
+		if Tag.OnText(self, userInput) then return end
 		f.textHint:SetShown(self:GetText() == "")
 		if userInput and f.note then
 			f.note.text = self:GetText()
@@ -597,6 +1326,7 @@ local function CreateNoteFrame()
 	f.addHint:SetTextColor(INK[1], INK[2], INK[3], 0.4)
 	f.addHint:SetText("+ Add item")
 	f.addBox:SetScript("OnTextChanged", function(self, userInput)
+		if Tag.OnText(self, userInput) then return end
 		local broke = self:StripBreaks(userInput)
 		f.addHint:SetShown(self:GetText() == "")
 		if (userInput or broke) and f.note and f.note.items then RefreshItems(f) end
@@ -708,6 +1438,11 @@ local function CreateNoteFrame()
 		if areaPanel and areaPanel.owner == self then areaPanel:Hide() end
 	end)
 	f:SetScript("OnMouseDown", function(self) self:Raise() end)
+	AttachTags(f.edit, f)
+	AttachTags(f.addBox, f)
+	f.addView = CreateView(f.listChild, f.addBox, ITEM_W)
+	f.addBox:HookScript("OnEditFocusGained", function() RefreshItems(f) end)
+	f.addBox:HookScript("OnEditFocusLost", function() RefreshItems(f) end)
 	return f
 end
 
@@ -1008,13 +1743,13 @@ local function Row_OnEnter(self)
 				break
 			end
 			if item.done then
-				GameTooltip:AddLine("[x] " .. item.text, 0.5, 0.5, 0.5)
+				GameTooltip:AddLine("[x] " .. Plain(item.text), 0.5, 0.5, 0.5)
 			else
-				GameTooltip:AddLine("[  ] " .. item.text, 0.9, 0.9, 0.9)
+				GameTooltip:AddLine("[  ] " .. Plain(item.text), 0.9, 0.9, 0.9)
 			end
 		end
 	elseif self.note.text ~= "" then
-		GameTooltip:AddLine(self.note.text:sub(1, 300), 0.9, 0.9, 0.9, true)
+		GameTooltip:AddLine(Plain(self.note.text):sub(1, 300), 0.9, 0.9, 0.9, true)
 	end
 	local areas = {}
 	for name in pairs(self.note.zones or {}) do areas[#areas + 1] = name end
@@ -1285,6 +2020,39 @@ function M:Enable()
 	BuildList()
 	BuildFloatButton()
 	UpdateFloatButton()
+
+	-- Tags: links held back by combat, item data arriving, new prices.
+	local redraw
+	local function QueueRedraw()
+		if redraw then return end
+		redraw = true
+		C_Timer.After(0.2, function()
+			redraw = nil
+			RefreshAllViews()
+		end)
+	end
+	local tagEvents = CreateFrame("Frame")
+	tagEvents:RegisterEvent("PLAYER_REGEN_ENABLED")
+	tagEvents:RegisterEvent("PLAYER_REGEN_DISABLED")
+	tagEvents:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+	tagEvents:SetScript("OnEvent", function(_, event)
+		if event == "PLAYER_REGEN_DISABLED" then
+			Tag.Hide()           -- it can't pass keys on once combat has started
+		elseif event == "PLAYER_REGEN_ENABLED" then
+			if next(pendingLinks) then
+				for view in pairs(pendingLinks) do EnableLinks(view) end
+				pendingLinks = {}
+				QueueRedraw()
+			end
+		elseif waitingForItems then
+			waitingForItems = nil
+			QueueRedraw()
+		end
+	end)
+	local auctionator = _G.Auctionator and _G.Auctionator.API and _G.Auctionator.API.v1
+	if auctionator and auctionator.RegisterForDBUpdate then
+		ns.Try(auctionator.RegisterForDBUpdate, "PredUI", QueueRedraw)
+	end
 
 	local events = CreateFrame("Frame")
 	events:RegisterEvent("PLAYER_ENTERING_WORLD")
