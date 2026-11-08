@@ -27,7 +27,7 @@ local S = ns.Style
 local M = ns.NewModule("notes", {
 	title = "Notes",
 	notes = "Post-it notes for reminders: a list of notes, pin one to keep it on screen, or have it open when you enter a zone or a capital city.",
-	defaults = { popup = true, sound = true, button = true, charOnly = true },
+	defaults = { popup = true, sound = true, button = true, charOnly = true, opacity = 100 },
 })
 
 local NOTE_W, NOTE_H = 260, 210
@@ -255,10 +255,14 @@ end
 
 local function ApplyPaper(f)
 	local _, r, g, b = unpack(Paper(f.note))
-	f.pBody:SetVertexColor(r, g, b, 0.97)
-	f.pEdge:SetVertexColor(r * 0.55, g * 0.55, b * 0.55, 1)
-	f.band:SetVertexColor(r * 0.86, g * 0.86, b * 0.86, 1)
+	-- Opacity setting: only the paper fades, the writing stays fully readable.
+	local a = math.max(0.1, math.min(1, (tonumber(db.opacity) or 100) / 100))
+	f.pBody:SetVertexColor(r, g, b, 0.97 * a)
+	f.pEdge:SetVertexColor(r * 0.55, g * 0.55, b * 0.55, a)
+	f.pShadow:SetVertexColor(0, 0, 0, 0.6 * a)
+	f.band:SetVertexColor(r * 0.86, g * 0.86, b * 0.86, a)
 	f.glow:SetColor(r, g, b)
+	f.glow:SetAlpha(0.35 * a)
 	f.swatch.tex:SetVertexColor(r * 0.8, g * 0.8, b * 0.8)
 	-- Scroll bar in a darker shade of the paper instead of PredUI's blue.
 	local thumb = f.bar:GetThumbTexture()
@@ -284,24 +288,54 @@ local function UpdateScrollBar(f)
 	f.bar:SetValue(math.min(range, math.floor((f.scroll:GetVerticalScroll() or 0) + 0.5)))
 end
 
--- A single-line, borderless edit box in ink, for checklist items.
-local function ItemBox(parent)
+local LINE_H = 14              -- height of one line of item text
+
+-- A borderless edit box in ink for checklist items. It's multi-line so long
+-- items wrap, but an item stays one paragraph: Enter runs onEnter instead of
+-- adding a line break (on whichever of OnEnterPressed / a typed "\n" the
+-- client delivers, once per key press).
+local function ItemBox(parent, onEnter)
 	local e = CreateFrame("EditBox", nil, parent)
+	e:SetMultiLine(true)
 	e:SetFont(STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF", 12, "")
 	e:SetTextColor(INK[1], INK[2], INK[3])
 	e:SetShadowOffset(0, 0)
 	e:SetAutoFocus(false)
 	e:SetMaxLetters(200)
-	e:SetHeight(ITEM_H)
+	e:SetWidth(ITEM_W)
+	e:SetHeight(LINE_H)
 	e:SetScript("OnEscapePressed", e.ClearFocus)
+	local lastEnter
+	local function Enter(self)
+		local now = GetTime()
+		if lastEnter == now then return end
+		lastEnter = now
+		onEnter(self)
+	end
+	e:SetScript("OnEnterPressed", Enter)
+	e.Enter = Enter
+	-- Called first by the boxes' own OnTextChanged: takes out a typed line
+	-- break and returns true if there was one (the caller saves, then Enters).
+	function e:StripBreaks(userInput)
+		local text = self:GetText()
+		if not text:find("[\r\n]") then return false end
+		self:SetText((text:gsub("[\r\n]+", " "):gsub("%s+$", "")))
+		return userInput and true or false
+	end
 	return e
 end
 
--- The line through a ticked item, as wide as its text.
-local function UpdateStrike(row)
+-- Height the text takes, wrapped at the item width.
+local function TextHeight(f, text)
+	f.measure:SetText((text and text ~= "") and text or " ")
+	return math.max(LINE_H, math.ceil(f.measure:GetStringHeight()))
+end
+
+-- Ticked items are dimmed; a one-line item also gets a line through it.
+local function UpdateStrike(row, height)
 	local done = row.item and row.item.done
 	row.edit:SetTextColor(INK[1], INK[2], INK[3], done and 0.45 or 1)
-	if not done then
+	if not done or height > LINE_H + 4 then
 		row.strike:Hide()
 		return
 	end
@@ -316,7 +350,7 @@ local function CreateItemRow(f)
 
 	row.check = CreateFrame("Button", nil, row)
 	row.check:SetSize(12, 12)
-	row.check:SetPoint("LEFT", 2, 0)
+	row.check:SetPoint("TOPLEFT", 2, -4)
 	S.Body(row.check, { 1, 1, 1, 0.35 }, INK)
 	row.check.pShadow:Hide()
 	row.check.tick = S.Texture(row.check, "ARTWORK", 0)
@@ -334,17 +368,17 @@ local function CreateItemRow(f)
 		RefreshItems(f)
 	end)
 
-	row.edit = ItemBox(row)
-	row.edit:SetPoint("LEFT", row.check, "RIGHT", 6, 0)
-	row.edit:SetWidth(ITEM_W)
+	row.edit = ItemBox(row, function() f.addBox:SetFocus() end)
+	row.edit:SetPoint("TOPLEFT", 20, -3)
 	row.edit:SetScript("OnTextChanged", function(self, userInput)
-		if userInput and row.item then
+		local broke = self:StripBreaks(userInput)
+		if (userInput or broke) and row.item then
 			row.item.text = self:GetText()
 			Touch(f.note)
+			RefreshItems(f)     -- the row may need another line
 		end
-		UpdateStrike(row)
+		if broke then self:Enter() end
 	end)
-	row.edit:SetScript("OnEnterPressed", function() f.addBox:SetFocus() end)
 	-- An item emptied by hand is removed.
 	row.edit:SetScript("OnEditFocusLost", function(self)
 		self:HighlightText(0, 0)
@@ -357,14 +391,14 @@ local function CreateItemRow(f)
 
 	row.strike = S.Texture(row, "OVERLAY", 0)
 	row.strike:SetHeight(1)
-	row.strike:SetPoint("LEFT", row.edit, "LEFT", 0, 0)
+	row.strike:SetPoint("TOPLEFT", row.edit, "TOPLEFT", 0, -math.floor(LINE_H / 2))
 	row.strike:SetVertexColor(INK[1], INK[2], INK[3], 0.6)
 	row.measure = row:CreateFontString(nil, "OVERLAY")
 	row.measure:SetFont(STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF", 12, "")
 	row.measure:Hide()
 
 	row.remove = InkButton(row, "x", 16)
-	row.remove:SetPoint("RIGHT", 0, 0)
+	row.remove:SetPoint("TOPRIGHT", 0, -1)
 	row.remove.tooltip = "Remove this item."
 	row.remove:SetScript("OnClick", function()
 		if not row.item then return end
@@ -391,20 +425,25 @@ RefreshItems = function(f)
 			row.edit:SetCursorPosition(0)
 		end
 		row.check.tick:SetShown(item.done and true or false)
-		UpdateStrike(row)
+		local h = TextHeight(f, item.text)
+		row.edit:SetHeight(h)
+		row:SetHeight(math.max(ITEM_H, h + 6))
+		UpdateStrike(row, h)
 		row:ClearAllPoints()
 		row:SetPoint("TOPLEFT", 0, y)
 		row:Show()
-		y = y - ITEM_H
+		y = y - math.max(ITEM_H, h + 6)
 	end
 	for i = #items + 1, #f.itemRows do
 		local row = f.itemRows[i]
 		row.item = nil
 		row:Hide()
 	end
+	local addH = TextHeight(f, f.addBox:GetText())
+	f.addBox:SetHeight(addH)
 	f.addBox:ClearAllPoints()
-	f.addBox:SetPoint("TOPLEFT", 20, y)
-	f.listChild:SetHeight(-y + ITEM_H)
+	f.addBox:SetPoint("TOPLEFT", 20, y - 3)
+	f.listChild:SetHeight(-y + math.max(ITEM_H, addH + 6))
 	f.clear:SetShown(Progress(f.note) > 0)
 end
 
@@ -529,15 +568,14 @@ local function CreateNoteFrame()
 	f.listChild:SetSize(TEXT_W, ITEM_H)
 	f.listChild:Hide()
 	f.itemRows = {}
-	f.addBox = ItemBox(f.listChild)
-	f.addBox:SetWidth(ITEM_W)
-	f.addHint = S.Text(f.addBox, 12)
-	f.addHint:SetShadowOffset(0, 0)
-	f.addHint:SetPoint("LEFT")
-	f.addHint:SetTextColor(INK[1], INK[2], INK[3], 0.4)
-	f.addHint:SetText("+ Add item")
-	f.addBox:SetScript("OnTextChanged", function(self) f.addHint:SetShown(self:GetText() == "") end)
-	f.addBox:SetScript("OnEnterPressed", function(self)
+	-- Measures wrapped item text, so rows can grow to fit it.
+	f.measure = f.listChild:CreateFontString(nil, "OVERLAY")
+	f.measure:SetFont(STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF", 12, "")
+	f.measure:SetWidth(ITEM_W)
+	f.measure:SetWordWrap(true)
+	if f.measure.SetNonSpaceWrap then f.measure:SetNonSpaceWrap(true) end
+	f.measure:Hide()
+	f.addBox = ItemBox(f.listChild, function(self)
 		local text = Trim(self:GetText())
 		if text == "" then
 			self:ClearFocus()
@@ -549,9 +587,20 @@ local function CreateNoteFrame()
 		RefreshItems(f)
 		-- Keep the add box in view as the list grows.
 		C_Timer.After(0, function()
-			f.scroll:SetVerticalScroll(f.scroll:GetVerticalScrollRange())
+			f.scroll:SetVerticalScroll(f.scroll:GetVerticalScrollRange() or 0)
 			UpdateScrollBar(f)
 		end)
+	end)
+	f.addHint = S.Text(f.addBox, 12)
+	f.addHint:SetShadowOffset(0, 0)
+	f.addHint:SetPoint("TOPLEFT")
+	f.addHint:SetTextColor(INK[1], INK[2], INK[3], 0.4)
+	f.addHint:SetText("+ Add item")
+	f.addBox:SetScript("OnTextChanged", function(self, userInput)
+		local broke = self:StripBreaks(userInput)
+		f.addHint:SetShown(self:GetText() == "")
+		if (userInput or broke) and f.note and f.note.items then RefreshItems(f) end
+		if broke then self:Enter() end
 	end)
 
 	-- Keep the cursor in view while typing.
@@ -1109,6 +1158,13 @@ end
 -- Commands
 --------------------------------------------------------------------------------
 
+function M.SetOpacity(value)
+	db.opacity = math.max(10, math.min(100, math.floor((tonumber(value) or 100) / 5 + 0.5) * 5))
+	for _, f in pairs(frames) do
+		if f.note then ApplyPaper(f) end
+	end
+end
+
 function M.ToggleList()
 	if listFrame:IsShown() then listFrame:Hide() else listFrame:Show() end
 end
@@ -1167,6 +1223,14 @@ local function OnSlash(msg)
 	elseif cmd == "test" then
 		local n = CheckAreas(true)
 		M.Say(n > 0 and ("opened %d note(s) that have an area."):format(n) or "no closed notes with an area to open. Add one with Areas on a note.")
+	elseif cmd == "opacity" then
+		local n = tonumber(rest)
+		if n then
+			M.SetOpacity(n)
+			M.Say(("notes at %d%% opacity."):format(db.opacity))
+		else
+			M.Say(("usage: /notes opacity 10-100, now %d%%."):format(db.opacity))
+		end
 	elseif cmd == "button" then
 		db.button = not db.button
 		UpdateFloatButton()
@@ -1177,12 +1241,16 @@ local function OnSlash(msg)
 	elseif cmd == "options" then
 		ns.OpenSettings(M)
 	else
-		M.Say("/notes - list, /notes new [text], /notes newlist [milk, eggs], /notes where, /notes test, /notes button, /notes reset, /notes options")
+		M.Say("/notes - list, /notes new [text], /notes newlist [milk, eggs], /notes where, /notes test, /notes opacity N, /notes button, /notes reset, /notes options")
 	end
 end
 
 M.options = {
 	{ type = "button", label = "Your notes", button = "Open list", tooltip = "The list of notes (/notes).", func = function() M.ToggleList() end },
+	{ type = "slider", key = "opacity", label = "Note opacity", min = 10, max = 100, step = 5,
+		format = function(v) return ("%d%%"):format(v) end,
+		tooltip = "How see-through the paper of every note is. The writing stays fully readable.",
+		onChange = function(v) M.SetOpacity(v) end },
 	{ type = "checkbox", key = "charOnly", label = "New notes: this character only",
 		tooltip = "New notes are only seen by the character that wrote them. Untick to share new notes with all your characters. Each note can still be changed under Areas." },
 	{ type = "checkbox", key = "button", label = "Floating button",
