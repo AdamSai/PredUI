@@ -13,6 +13,9 @@
 --       header             label, tooltip: a section heading on the page
 --   * Buttons and onChange only run for modules that are on; a module that's
 --     off just stores the value for when it's turned back on.
+--   * Everything is listed alphabetically: module pages, and the sections and
+--     rows on each page. So the order of a module's M.options doesn't matter,
+--     and option text shouldn't say "above" or "below".
 --------------------------------------------------------------------------------
 
 local _, ns = ...
@@ -90,36 +93,72 @@ local function AddOption(category, layout, M, opt)
 	end
 end
 
+-- Sorts a list in place, A to Z ignoring case. Equal names keep their order.
+local function SortByName(list, nameOf)
+	local position = {}
+	for i, item in ipairs(list) do position[item] = i end
+	table.sort(list, function(a, b)
+		local nameA, nameB = nameOf(a):lower(), nameOf(b):lower()
+		if nameA ~= nameB then return nameA < nameB end
+		return position[a] < position[b]
+	end)
+	return list
+end
+
+-- A copy: ns.modules itself stays in load order, which is the start-up order.
+local function SortedModules()
+	local list = {}
+	for i, M in ipairs(ns.modules) do list[i] = M end
+	return SortByName(list, function(M) return M.title end)
+end
+
+-- A module's options in menu order: sections A to Z and the rows in each A to
+-- Z. A row with no label is an extra button for the row before it, so it stays
+-- right under that row.
+local function SortedOptions(options)
+	local ungrouped = { rows = {} }
+	local sections = {}
+	local current = ungrouped
+	for _, opt in ipairs(options) do
+		if opt.type == "header" then
+			current = { header = opt, rows = {} }
+			sections[#sections + 1] = current
+		elseif (opt.label or "") == "" and #current.rows > 0 then
+			local row = current.rows[#current.rows]
+			row[#row + 1] = opt
+		else
+			current.rows[#current.rows + 1] = { opt }
+		end
+	end
+
+	local sorted = {}
+	local function AddRows(section)
+		SortByName(section.rows, function(row) return row[1].label or "" end)
+		for _, row in ipairs(section.rows) do
+			for _, opt in ipairs(row) do sorted[#sorted + 1] = opt end
+		end
+	end
+	AddRows(ungrouped)
+	SortByName(sections, function(section) return section.header.label or "" end)
+	for _, section in ipairs(sections) do
+		sorted[#sorted + 1] = section.header
+		AddRows(section)
+	end
+	return sorted
+end
+
 local function BuildMainPage()
 	local category, layout = Settings.RegisterVerticalLayoutCategory("PredUI")
 	mainCategory = category
 
-	AddHeader(layout, "Modules", "Turning a module on or off takes a reload.")
-	for _, M in ipairs(ns.modules) do
-		local setting = Settings.RegisterProxySetting(category, Variable(nil, "module_" .. M.key), Settings.VarType.Boolean,
-			M.title, true,
-			function() return ns.IsEnabled(M.key) end,
-			function(value)
-				if value == ns.IsEnabled(M.key) then return end
-				PredUIDB.modules[M.key] = value and true or false
-				ns.AskReload()
-			end)
-		Settings.CreateCheckbox(category, setting, M.notes .. "\n\nTakes a reload.")
-	end
-
+	-- These sections and the rows in them are written out by hand, so keep them
+	-- in alphabetical order here. Modules and their options sort themselves.
 	AddHeader(layout, "Look", "Shared by every PredUI window and bar.")
-	local scale = Settings.RegisterProxySetting(category, Variable(nil, "scale"), Settings.VarType.Number,
-		"Scale", 1,
-		function() return ns.global.scale or 1 end,
-		function(value)
-			ns.global.scale = math.floor(value * 20 + 0.5) / 20
-			S.ApplyGlobal()
-		end)
-	local scaleOptions = Settings.CreateSliderOptions(0.6, 1.6, 0.05)
-	scaleOptions:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Right, function(v)
-		return ("%d%%"):format(math.floor(v * 100 + 0.5))
-	end)
-	Settings.CreateSlider(category, scale, scaleOptions, "Size of every PredUI window and bar.")
+	local launcher = Settings.RegisterProxySetting(category, Variable(nil, "launcher"), Settings.VarType.Boolean,
+		"Floating button", true,
+		function() return ns.global.launcher and true or false end,
+		function(value) ns.SetLauncherShown(value) end)
+	Settings.CreateCheckbox(category, launcher, "A PredUI button you can drag anywhere. Click it for a row of icons that open the PredUI windows (Notes, Loot Room, Mail Ledger...). Right-click opens these settings.")
 
 	local glow = Settings.RegisterProxySetting(category, Variable(nil, "glow"), Settings.VarType.Boolean,
 		"Glow", true,
@@ -136,11 +175,31 @@ local function BuildMainPage()
 		function(value) ns.SetMinimapButtonShown(value) end)
 	Settings.CreateCheckbox(category, minimap, "The PredUI button on the minimap. Left-click opens these settings, right-click the Mail Ledger panel.")
 
-	local launcher = Settings.RegisterProxySetting(category, Variable(nil, "launcher"), Settings.VarType.Boolean,
-		"Floating button", true,
-		function() return ns.global.launcher and true or false end,
-		function(value) ns.SetLauncherShown(value) end)
-	Settings.CreateCheckbox(category, launcher, "A PredUI button you can drag anywhere. Click it for a row of icons that open the PredUI windows (Notes, Loot Room, Mail Ledger...). Right-click opens these settings.")
+	local scale = Settings.RegisterProxySetting(category, Variable(nil, "scale"), Settings.VarType.Number,
+		"Scale", 1,
+		function() return ns.global.scale or 1 end,
+		function(value)
+			ns.global.scale = math.floor(value * 20 + 0.5) / 20
+			S.ApplyGlobal()
+		end)
+	local scaleOptions = Settings.CreateSliderOptions(0.6, 1.6, 0.05)
+	scaleOptions:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Right, function(v)
+		return ("%d%%"):format(math.floor(v * 100 + 0.5))
+	end)
+	Settings.CreateSlider(category, scale, scaleOptions, "Size of every PredUI window and bar.")
+
+	AddHeader(layout, "Modules", "Turning a module on or off takes a reload.")
+	for _, M in ipairs(SortedModules()) do
+		local setting = Settings.RegisterProxySetting(category, Variable(nil, "module_" .. M.key), Settings.VarType.Boolean,
+			M.title, true,
+			function() return ns.IsEnabled(M.key) end,
+			function(value)
+				if value == ns.IsEnabled(M.key) then return end
+				PredUIDB.modules[M.key] = value and true or false
+				ns.AskReload()
+			end)
+		Settings.CreateCheckbox(category, setting, M.notes .. "\n\nTakes a reload.")
+	end
 
 	AddHeader(layout, "Reload")
 	AddButton(layout, "Apply module changes", "Reload UI", "Reloads the interface.", function() ReloadUI() end)
@@ -152,7 +211,7 @@ local function BuildModulePage(M)
 	local category, layout = Settings.RegisterVerticalLayoutSubcategory(mainCategory, M.title)
 	pages[M] = category
 	AddHeader(layout, M.title, M.notes)
-	for _, opt in ipairs(M.options or {}) do
+	for _, opt in ipairs(SortedOptions(M.options or {})) do
 		AddOption(category, layout, M, opt)
 	end
 end
@@ -160,7 +219,7 @@ end
 function ns.RegisterSettings()
 	if not (Settings and Settings.RegisterVerticalLayoutCategory) then return end
 	BuildMainPage()
-	for _, M in ipairs(ns.modules) do
+	for _, M in ipairs(SortedModules()) do
 		BuildModulePage(M)
 	end
 end
@@ -182,7 +241,7 @@ end
 local function PrintHelp()
 	ns.Print("our addons in one. /predui opens the settings. Modules and their commands:")
 	local commands = {
-		flight = "/flighttimer", craft = "/crafttimer", bag = "/bagvalue", icon = "/iconsearch",
+		flight = "/flighttimer", craft = "/crafttimer", cast = "/castbars", bag = "/bagvalue", icon = "/iconsearch",
 		loot = "/lootroom", mail = "/mledger", cvars = "/hiddensettings", paladin = "/palbuffs", bankalt = "/bankalt", notes = "/notes", partyloc = "/partyloc", invwhisper = "/invwhisper", swing = "/swingtimer",
 	}
 	for _, M in ipairs(ns.modules) do

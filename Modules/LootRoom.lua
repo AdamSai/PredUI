@@ -10,6 +10,13 @@
 --     free slot, so the window stays hidden for it.
 --   * Deleting asks first, and re-checks that the slot still holds the same
 --     item and count.
+--   * Deleting with the loot window open loots into the freed slot once the
+--     bags update (setting "Loot the best item after deleting"): quest loot
+--     first, then the most valuable loot worth more than the deleted item, one
+--     item per free slot. Loot that stacks onto what you have is taken too.
+--     Slots being rolled on or master-looted (GetLootSlotInfo "locked") are
+--     skipped, and Blizzard's bind-on-pickup confirm still asks. LootSlot is
+--     undocumented but Blizzard's LootFrame calls it the same way.
 --   * Right-click an item for "Never offer this item": its item ID goes on a
 --     saved list (shared by all characters) and it's skipped from then on.
 --     The settings page can clear the list.
@@ -35,7 +42,7 @@ local S = ns.Style
 local M = ns.NewModule("loot", {
 	title = "Loot Room",
 	notes = "When your bags are full, shows your lowest-value items next to the loot window so you can free a slot.",
-	defaults = { count = 5, sortBy = "vendor", questFull = true },
+	defaults = { count = 5, sortBy = "vendor", questFull = true, lootAfterDelete = true },
 })
 
 local SORT_LABELS = { vendor = "Vendor price", ah = "AH price", best = "Higher of the two" }
@@ -230,10 +237,11 @@ local function GetLootEntries(cheapest)
 
 	for lootSlot = 1, GetNumLootItems() do
 		if GetLootSlotType(lootSlot) == LOOT_SLOT_ITEM then
-			local texture, _, quantity, _, _, _, isQuestItem = GetLootSlotInfo(lootSlot)
+			local texture, _, quantity, _, _, locked, isQuestItem = GetLootSlotInfo(lootSlot)
 			local link = GetLootSlotLink(lootSlot)
 			quantity = quantity or 1
-			local entry = { lootSlot = lootSlot, icon = texture, link = link, count = quantity }
+			-- locked: being rolled on or master-looted, so not ours to take.
+			local entry = { lootSlot = lootSlot, icon = texture, link = link, count = quantity, locked = locked }
 
 			local itemID = link and C_Item.GetItemInfoInstant(link)
 			local name, sellPrice, classID, bindType, maxStack
@@ -254,10 +262,12 @@ local function GetLootEntries(cheapest)
 				needsRoom = true
 			end
 
+			entry.fits = fits
 			if fits then
 				entry.verdict = VERDICT.stacks
 			elseif isQuestItem or classID == Enum.ItemClass.Questitem or bindType == BIND_QUEST then
 				entry.verdict = VERDICT.quest
+				entry.isQuest = true
 			end
 
 			-- Loot isn't bound until it's in the bags, so the AH price applies.
@@ -345,7 +355,7 @@ local function BagRow_OnClick(self, button)
 		label = label .. " x" .. entry.count
 	end
 	StaticPopup_Show("PREDUI_LOOTROOM_DELETE", label, nil, {
-		bag = entry.bag, slot = entry.slot, itemID = entry.itemID, count = entry.count,
+		bag = entry.bag, slot = entry.slot, itemID = entry.itemID, count = entry.count, value = entry.value,
 	})
 end
 
@@ -598,6 +608,56 @@ local function HideWindow()
 end
 
 --------------------------------------------------------------------------------
+-- Looting after a delete
+--------------------------------------------------------------------------------
+
+local LOOT_AFTER_WINDOW = 3      -- seconds after a delete its freed slot is used
+local pendingLoot                -- { at = GetTime(), value = the deleted item's value }
+
+local function FreeSlots()
+	local n = 0
+	ForEachRegularBag(function(_, free) n = n + free end)
+	return n
+end
+
+-- Loot that fits onto stacks already in the bags is taken anyway (it costs no
+-- slot). Then, one per free slot: quest loot first, then loot worth more than
+-- the deleted item, most valuable first. Returns false while no slot is free
+-- yet (the delete hasn't reached the bags).
+local function LootAfterDelete(deletedValue)
+	local free = FreeSlots()
+	if free == 0 then return false end
+
+	local wanted = {}
+	for _, entry in ipairs((GetLootEntries(nil))) do
+		if ns.Public(entry.locked) and not entry.locked then
+			if entry.fits then
+				LootSlot(entry.lootSlot)
+			elseif entry.isQuest or (entry.value and entry.value > deletedValue) then
+				wanted[#wanted + 1] = entry
+			end
+		end
+	end
+	table.sort(wanted, function(a, b)
+		if (a.isQuest or false) ~= (b.isQuest or false) then return a.isQuest == true end
+		return (a.value or 0) > (b.value or 0)
+	end)
+	for i = 1, math.min(free, #wanted) do
+		LootSlot(wanted[i].lootSlot)
+	end
+	return true
+end
+
+local function OnBagsChanged()
+	if not pendingLoot then return end
+	if not lootOpen or GetTime() - pendingLoot.at > LOOT_AFTER_WINDOW then
+		pendingLoot = nil
+	elseif LootAfterDelete(pendingLoot.value) then
+		pendingLoot = nil
+	end
+end
+
+--------------------------------------------------------------------------------
 -- Delete confirmation
 --------------------------------------------------------------------------------
 
@@ -617,6 +677,9 @@ local function DeleteEntry(data)
 	C_Container.PickupContainerItem(data.bag, data.slot)
 	if CursorHasItem() then
 		DeleteCursorItem()
+		if lootOpen and db.lootAfterDelete then
+			pendingLoot = { at = GetTime(), value = data.value or 0 }
+		end
 	end
 	QueueRefresh()
 end
@@ -761,9 +824,11 @@ M.options = {
 	{ type = "button", label = "Hidden items", button = "Offer again",
 		tooltip = "Clear the list of items you chose to never offer (right-click an item in the window).",
 		func = ClearHidden },
+	{ type = "checkbox", key = "lootAfterDelete", label = "Loot the best item after deleting",
+		tooltip = "When you delete an item from the list while the loot window is open, take the loot that needs the freed slot: quest loot first, then the most valuable loot worth more than what you deleted.\n\nLoot that fits onto a stack you already have is taken too. Items being rolled on are left alone." },
 	{ type = "checkbox", key = "questFull", label = "Open when a quest can't be turned in",
 		tooltip = "Show the list by itself when you can't turn in a quest because your bags are full." },
-	{ type = "button", label = "List my items", button = "Show list", tooltip = "Show your lowest-value items now, in the order above, without looting or full bags. Click one to delete it, drag the window to move it. Also /lootroom show.", func = function() M.Test() end },
+	{ type = "button", label = "List my items", button = "Show list", tooltip = "Show your lowest-value items now, in the order you picked under Value by, without looting or full bags. Click one to delete it, drag the window to move it. Also /lootroom show.", func = function() M.Test() end },
 	{ type = "button", label = "List position", button = "Reset", tooltip = "Put the list you open by hand back in its default place.", func = function() M.ResetPosition() end },
 }
 
@@ -806,9 +871,11 @@ function M:Enable()
 			QueueRefresh()
 		elseif event == "LOOT_CLOSED" then
 			lootOpen = false
+			pendingLoot = nil
 			if not manualMode then HideWindow() end
-		elseif lootOpen or manualMode then
-			QueueRefresh()
+		else
+			if event == "BAG_UPDATE_DELAYED" then OnBagsChanged() end
+			if lootOpen or manualMode then QueueRefresh() end
 		end
 	end)
 end

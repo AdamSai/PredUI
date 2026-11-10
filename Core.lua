@@ -18,7 +18,7 @@
 local ADDON, ns = ...
 
 ns.ADDON = ADDON
-ns.modules = {}                -- in the order the files load, which is the menu order
+ns.modules = {}                -- in the order the files load (the menu sorts its own copy)
 ns.byKey = {}
 
 local CHAT_PREFIX = "|cff4fc3f7PredUI|r "

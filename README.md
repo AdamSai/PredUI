@@ -14,8 +14,9 @@ The PredUI floating button (drag it anywhere) opens a row of icons for the PredU
 |---|---|---|
 | **Flight Timer** | A faction-coloured bar counting down your flight. Learns each route's real time the first time you fly it. | `/flighttimer` |
 | **Craft Timer** | Shows how long a bulk craft will take, and a countdown bar while it runs. Learns each recipe's real time. | `/crafttimer` |
+| **Cast Bars** | PredUI bars for your own, your target's and your focus's casts, in place of Blizzard's. Move and snap them in Edit Mode. | `/castbars` |
 | **Breath Bar** | Flight Timer's bar for breath under water, fatigue in deep water and feign death, in place of Blizzard's small bars. | `/breathbar` |
-| **Swing Timer** | Bars counting down to your next main hand, off hand and ranged swing, in place of Blizzard's own. Shows when your target is out of range. Move and snap the bars in Edit Mode. | `/swingtimer` |
+| **Swing Timer** | Bars counting down to your next main hand, off hand and ranged swing, in place of Blizzard's own. Shows when your target is out of range, marks the ranged wind-up so you know when to stop moving, and tells hunters and wand users whether their target is in range, how far it is and how close they need to be. Their ranged bar shows as soon as they target an enemy. Move and snap the bars in Edit Mode. | `/swingtimer` |
 | **Bag Value** | Shows the vendor sell value of each item on its icon in your bags and bank, plus the total for your bags. | `/bagvalue` |
 | **Bank Alt** | Marks what's worth sending to your bank alt: BoE items, valuable items, trash, soulbound and quest items (see below). | `/bankalt` |
 | **Icon Search** | Search every macro icon by name or file ID and apply it to a macro or equipment set. | `/iconsearch` |
@@ -60,6 +61,7 @@ When you loot with full bags, a window next to the loot window lists your lowest
 - **Quest turn-ins:** the list also opens by itself when a quest can't be turned in because your bags are full (can be turned off in the settings).
 - "Items shown" sets how many rows the window has; scroll (bar or mouse wheel) to see the rest of your items, cheapest first.
 - Click an item to delete it (it asks first). Right-click for "Never offer this item"; `/lootroom unhide` offers them again.
+- **Loot after deleting:** delete an item while the loot window is open and the freed slot is filled straight away: quest loot first, then the most valuable loot worth more than what you deleted. Loot that stacks onto what you already have is taken too, and items being rolled on are left alone (can be turned off in the settings).
 - Quest items and items in profession bags are never listed. Loot that fits onto a stack you already have doesn't open the window.
 
 <img src="docs/screenshots/loot-room-list.png" alt="Loot Room list of lowest-value items, valued by AH price" width="400">

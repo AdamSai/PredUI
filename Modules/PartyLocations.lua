@@ -928,7 +928,7 @@ M.options = {
 	{ type = "button", label = "Preview", button = "Test", tooltip = "Show the panel with a made-up group. Also /partyloc test.", func = function() OnSlash("test") end },
 	{ type = "button", label = "Learned zones", button = "Forget", tooltip = "Forget which zone each dungeon is in. It's learned again as you enter them.", func = function() OnSlash("forget") end },
 	{ type = "header", label = "Filters", tooltip = "Hide listings on the Browse tab. Also on the bar under the Group Finder." },
-	{ type = "checkbox", key = "filterBar", label = "Show the filter bar", tooltip = "A bar under the Group Finder's Browse tab with the filters below and a text search. Filters still apply when it's hidden.", onChange = QueueRefresh },
+	{ type = "checkbox", key = "filterBar", label = "Show the filter bar", tooltip = "A bar under the Group Finder's Browse tab with the filters on this page and a text search. Filters still apply when it's hidden.", onChange = QueueRefresh },
 	{ type = "slider", key = "minPlayers", label = "Fewest players", min = 0, max = MAX_PLAYERS, step = 1, format = function(v) return v == 0 and "Any" or tostring(v) end, tooltip = "Hide groups with fewer players than this.", onChange = FiltersChanged },
 	{ type = "slider", key = "maxPlayers", label = "Most players", min = 0, max = MAX_PLAYERS, step = 1, format = function(v) return v == 0 and "Any" or tostring(v) end, tooltip = "Hide groups with more players than this.", onChange = FiltersChanged },
 	{ type = "checkbox", key = "noSolo", label = "Hide solo players", tooltip = "Hide single players looking for a group.", onChange = FiltersChanged },

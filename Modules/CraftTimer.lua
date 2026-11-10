@@ -104,6 +104,14 @@ local function UpdateCastBars()
 			if frame:IsShown() then frame:SetAlpha(1) end
 		end
 	end
+	-- Cast Bars may want that bar kept hidden.
+	local castBarsModule = ns.byKey.cast
+	if castBarsModule and castBarsModule.enabled then castBarsModule.RefreshBlizzard() end
+end
+
+-- For Cast Bars: is this spell on the Craft Timer bar instead of a cast bar?
+function M.IsShowing(spellID)
+	return Muting() and spellID == run.spellID
 end
 
 --------------------------------------------------------------------------------
